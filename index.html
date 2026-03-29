@@ -1,0 +1,2221 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ClipCutter</title>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #0a0a0c;
+    --surface: #111114;
+    --surface-2: #19191e;
+    --surface-3: #1f1f26;
+    --border: #2a2a32;
+    --border-hover: #3a3a45;
+    --text: #e8e8ed;
+    --text-dim: #7a7a88;
+    --text-dimmer: #55555f;
+    --accent: #f43f5e;
+    --accent-hover: #fb7185;
+    --accent-glow: rgba(244, 63, 94, 0.15);
+    --accent-glow-strong: rgba(244, 63, 94, 0.3);
+    --green: #22c55e;
+    --green-dim: rgba(34, 197, 94, 0.12);
+    --green-border: rgba(34, 197, 94, 0.25);
+    --yellow: #eab308;
+    --yellow-dim: rgba(234, 179, 8, 0.1);
+    --yellow-border: rgba(234, 179, 8, 0.25);
+    --red: #ef4444;
+    --red-dim: rgba(239, 68, 68, 0.1);
+    --red-border: rgba(239, 68, 68, 0.25);
+    --blue: #3b82f6;
+    --blue-dim: rgba(59, 130, 246, 0.1);
+    --blue-border: rgba(59, 130, 246, 0.25);
+    --mono: 'JetBrains Mono', monospace;
+    --sans: 'Outfit', sans-serif;
+    --radius: 10px;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    font-family: var(--sans);
+    background: var(--bg);
+    color: var(--text);
+    min-height: 100vh;
+    overflow-x: hidden;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  body::after {
+    content: '';
+    position: fixed;
+    inset: 0;
+    background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.03'/%3E%3C/svg%3E");
+    pointer-events: none;
+    z-index: 9999;
+  }
+
+  .app {
+    max-width: 720px;
+    margin: 0 auto;
+    padding: 20px 24px 80px;
+  }
+
+  /* ── Header ── */
+  .header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 8px;
+  }
+  .logo-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .logo-mark {
+    width: 30px; height: 30px;
+    background: var(--accent);
+    border-radius: 7px;
+    display: grid; place-items: center;
+    font-size: 15px;
+    box-shadow: 0 0 16px var(--accent-glow);
+    flex-shrink: 0;
+  }
+  .logo-text {
+    font-family: var(--mono);
+    font-size: 18px;
+    font-weight: 700;
+    letter-spacing: -0.5px;
+  }
+  .header-actions {
+    display: flex;
+    gap: 6px;
+  }
+  .icon-btn {
+    width: 32px; height: 32px;
+    background: transparent;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    color: var(--text-dim);
+    font-size: 14px;
+    cursor: pointer;
+    display: grid; place-items: center;
+    transition: all 0.15s;
+  }
+  .icon-btn:hover { background: var(--surface-2); color: var(--text); border-color: var(--border-hover); }
+
+  /* ── Tabs ── */
+  .tabs {
+    display: flex;
+    gap: 2px;
+    background: var(--surface);
+    border-radius: 10px;
+    padding: 3px;
+    margin-bottom: 24px;
+    border: 1px solid var(--border);
+  }
+  .tab {
+    flex: 1;
+    padding: 8px 0;
+    text-align: center;
+    font-family: var(--mono);
+    font-size: 11px;
+    font-weight: 500;
+    letter-spacing: 0.5px;
+    text-transform: uppercase;
+    color: var(--text-dim);
+    background: transparent;
+    border: none;
+    border-radius: 8px;
+    cursor: pointer;
+    transition: all 0.15s;
+  }
+  .tab:hover { color: var(--text); }
+  .tab.active {
+    background: var(--surface-3);
+    color: var(--text);
+    box-shadow: 0 1px 4px rgba(0,0,0,0.2);
+  }
+
+  /* ── Views ── */
+  .view { display: none; }
+  .view.active { display: block; }
+
+  /* ── Setup Banner ── */
+  .setup-banner {
+    padding: 12px 16px;
+    border-radius: var(--radius);
+    font-size: 12px;
+    margin-bottom: 20px;
+    display: none;
+    align-items: flex-start;
+    gap: 8px;
+    line-height: 1.6;
+  }
+  .setup-banner.warn {
+    background: var(--yellow-dim);
+    border: 1px solid var(--yellow-border);
+    color: var(--yellow);
+    display: flex;
+  }
+  .setup-banner code {
+    background: rgba(255,255,255,0.08);
+    padding: 1px 5px;
+    border-radius: 3px;
+    font-family: var(--mono);
+    font-size: 11px;
+  }
+
+  /* ── Form Fields ── */
+  .field { margin-bottom: 18px; }
+
+  label {
+    display: block;
+    font-family: var(--mono);
+    font-size: 10px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 1.5px;
+    color: var(--text-dim);
+    margin-bottom: 6px;
+  }
+
+  input[type="text"], input[type="number"], input[type="password"], textarea {
+    width: 100%;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    color: var(--text);
+    font-family: var(--mono);
+    font-size: 13px;
+    padding: 11px 14px;
+    outline: none;
+    transition: border-color 0.2s, box-shadow 0.2s;
+  }
+  input:hover, textarea:hover { border-color: var(--border-hover); }
+  input:focus, textarea:focus {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px var(--accent-glow);
+  }
+  ::placeholder { color: var(--text-dimmer); }
+
+  textarea {
+    min-height: 130px;
+    resize: vertical;
+    line-height: 1.75;
+  }
+
+  .hint {
+    font-size: 11px;
+    color: var(--text-dimmer);
+    margin-top: 5px;
+    line-height: 1.5;
+  }
+  .hint code {
+    color: var(--text-dim);
+    font-family: var(--mono);
+    font-size: 11px;
+  }
+
+  .row { display: flex; gap: 12px; }
+  .row .field { flex: 1; }
+
+  /* ── Buttons ── */
+  .btn-row { display: flex; gap: 10px; margin-top: 24px; }
+
+  button {
+    font-family: var(--sans);
+    font-weight: 600;
+    font-size: 13px;
+    border: none;
+    border-radius: var(--radius);
+    padding: 11px 22px;
+    cursor: pointer;
+    transition: all 0.15s;
+  }
+
+  .btn-ghost {
+    background: transparent;
+    color: var(--text-dim);
+    border: 1px solid var(--border);
+    flex: 1;
+  }
+  .btn-ghost:hover { background: var(--surface-2); color: var(--text); border-color: var(--border-hover); }
+
+  .btn-primary {
+    background: var(--accent);
+    color: #fff;
+    flex: 2;
+    box-shadow: 0 2px 16px var(--accent-glow);
+  }
+  .btn-primary:hover {
+    background: var(--accent-hover);
+    box-shadow: 0 4px 24px var(--accent-glow-strong);
+    transform: translateY(-1px);
+  }
+  .btn-primary:active { transform: translateY(0); }
+  .btn-primary:disabled { opacity: 0.35; cursor: not-allowed; transform: none; box-shadow: none; }
+
+  .btn-sm {
+    padding: 7px 14px;
+    font-size: 12px;
+    border-radius: 8px;
+  }
+
+  /* ── Clip Cards ── */
+  .clip-cards { display: flex; flex-direction: column; gap: 8px; }
+
+  .clip-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 14px 16px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    transition: border-color 0.15s;
+    cursor: default;
+  }
+  .clip-card:hover { border-color: var(--border-hover); }
+
+  .clip-status {
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    flex-shrink: 0;
+  }
+  .clip-status.queued { background: var(--text-dimmer); }
+  .clip-status.downloading { background: var(--blue); animation: pulse 1s ease-in-out infinite; }
+  .clip-status.downloaded { background: var(--green); }
+  .clip-status.transcribing { background: var(--yellow); animation: pulse 1s ease-in-out infinite; }
+  .clip-status.analyzing { background: var(--accent); animation: pulse 1s ease-in-out infinite; }
+  .clip-status.ready { background: var(--green); }
+  .clip-status.exporting { background: var(--blue); animation: pulse 1s ease-in-out infinite; }
+  .clip-status.exported { background: var(--green); }
+  .clip-status.error { background: var(--red); }
+
+  @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.3; } }
+
+  .clip-info { flex: 1; min-width: 0; }
+  .clip-note {
+    font-weight: 500;
+    font-size: 14px;
+    margin-bottom: 3px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .clip-meta {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--text-dim);
+  }
+  .clip-badge {
+    font-family: var(--mono);
+    font-size: 10px;
+    padding: 3px 8px;
+    border-radius: 6px;
+    flex-shrink: 0;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+  .clip-badge.queued { background: var(--surface-2); color: var(--text-dimmer); }
+  .clip-badge.downloading { background: var(--blue-dim); color: var(--blue); border: 1px solid var(--blue-border); }
+  .clip-badge.downloaded { background: var(--green-dim); color: var(--green); border: 1px solid var(--green-border); }
+  .clip-badge.transcribing { background: var(--yellow-dim); color: var(--yellow); border: 1px solid var(--yellow-border); }
+  .clip-badge.transcribed { background: var(--green-dim); color: var(--green); border: 1px solid var(--green-border); }
+  .clip-badge.analyzing { background: var(--accent-glow); color: var(--accent); border: 1px solid rgba(244,63,94,0.3); }
+  .clip-badge.ready { background: var(--green-dim); color: var(--green); border: 1px solid var(--green-border); }
+  .clip-badge.exporting { background: var(--blue-dim); color: var(--blue); border: 1px solid var(--blue-border); }
+  .clip-badge.exported { background: var(--green-dim); color: var(--green); border: 1px solid var(--green-border); }
+  .clip-badge.error { background: var(--red-dim); color: var(--red); border: 1px solid var(--red-border); }
+
+  .clip-error {
+    font-size: 11px;
+    color: var(--red);
+    margin-top: 2px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .clip-actions { display: flex; gap: 6px; flex-shrink: 0; align-items: center; }
+
+  .clip-card.selected { border-color: var(--accent); background: var(--surface-2); }
+  .clip-card.clickable { cursor: pointer; }
+
+  /* ── Scan State ── */
+  .scan-state {
+    text-align: center;
+    padding: 56px 24px;
+  }
+  .scan-spinner {
+    font-size: 28px;
+    margin-bottom: 16px;
+    animation: spin 1.8s linear infinite;
+    display: inline-block;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .scan-title {
+    font-size: 16px;
+    font-weight: 600;
+    color: var(--text);
+    margin-bottom: 8px;
+  }
+  .scan-sub {
+    font-size: 13px;
+    color: var(--text-dim);
+    max-width: 340px;
+    margin: 0 auto;
+  }
+
+  /* ── Suggestion Cards ── */
+  .sugg-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 12px 14px;
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    transition: border-color 0.15s;
+    margin-bottom: 6px;
+  }
+  .sugg-card.selected { border-color: var(--accent); }
+  .sugg-card input[type=checkbox] {
+    accent-color: var(--accent);
+    width: 15px;
+    height: 15px;
+    margin-top: 2px;
+    flex-shrink: 0;
+    cursor: pointer;
+  }
+  .sugg-info { flex: 1; min-width: 0; }
+  .sugg-title {
+    font-weight: 500;
+    font-size: 13px;
+    margin-bottom: 3px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .sugg-meta {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--text-dim);
+  }
+  .sugg-reasoning {
+    font-size: 11px;
+    color: var(--text-dimmer);
+    margin-top: 3px;
+    line-height: 1.5;
+  }
+
+  /* ── Add Segment Row ── */
+  .add-segment-row {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    margin-top: 8px;
+  }
+  .add-seg-input {
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    color: var(--text);
+    font-family: var(--mono);
+    font-size: 12px;
+    padding: 8px 10px;
+    outline: none;
+  }
+  .add-seg-input:focus { border-color: var(--accent); }
+
+  /* ── YouTube Timestamps Panel ── */
+  .yt-timestamps {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 10px 14px;
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--text-dim);
+    white-space: pre-wrap;
+    max-height: 110px;
+    overflow-y: auto;
+    margin-top: 6px;
+  }
+
+  /* ── Copy Panel ── */
+  .copy-panel {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    margin-top: 8px;
+    padding: 14px 16px;
+  }
+  .copy-panel-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 12px;
+  }
+  .copy-panel-label {
+    font-family: var(--mono);
+    font-size: 10px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 1.5px;
+    color: var(--accent);
+  }
+  .copy-field { margin-bottom: 10px; }
+  .copy-field:last-child { margin-bottom: 0; }
+  .copy-field-label {
+    font-family: var(--mono);
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    color: var(--text-dimmer);
+    margin-bottom: 4px;
+  }
+  .copy-field-row {
+    display: flex;
+    gap: 8px;
+    align-items: flex-start;
+  }
+  /* Override global input/textarea: surface-2 bg, sans font, tighter padding */
+  .copy-input, .copy-textarea-el {
+    flex: 1;
+    background: var(--surface-2);
+    border-radius: 8px;
+    font-family: var(--sans);
+    padding: 9px 12px;
+  }
+  .copy-textarea-el {
+    resize: vertical;
+    min-height: 72px;
+    line-height: 1.5;
+  }
+  .copy-btn {
+    background: var(--surface-3);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    color: var(--text-dim);
+    font-size: 11px;
+    font-family: var(--mono);
+    padding: 7px 10px;
+    cursor: pointer;
+    flex-shrink: 0;
+    white-space: nowrap;
+    transition: all 0.15s;
+    align-self: flex-start;
+  }
+  .copy-btn:hover { background: var(--surface-2); color: var(--text); border-color: var(--border-hover); }
+  .copy-btn.copied { color: var(--green); border-color: var(--green-border); }
+  .copy-empty {
+    font-size: 12px;
+    color: var(--text-dimmer);
+    text-align: center;
+    padding: 8px 0 2px;
+  }
+
+  /* ── Transcript Panel ── */
+  .transcript-panel {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    margin-top: 12px;
+    max-height: 400px;
+    overflow-y: auto;
+  }
+  .transcript-header {
+    padding: 10px 16px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+  .transcript-header-title {
+    font-family: var(--mono);
+    font-size: 10px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 1.5px;
+    color: var(--accent);
+  }
+  .transcript-close {
+    background: none;
+    border: none;
+    color: var(--text-dimmer);
+    font-size: 16px;
+    cursor: pointer;
+    padding: 0 4px;
+    line-height: 1;
+  }
+  .transcript-close:hover { color: var(--text); }
+  .transcript-segments { padding: 8px 0; }
+  .transcript-seg {
+    display: flex;
+    gap: 12px;
+    padding: 6px 16px;
+    transition: background 0.1s;
+    cursor: pointer;
+  }
+  .transcript-seg:hover { background: var(--surface-2); }
+  .transcript-seg:active { background: var(--surface-3); }
+  .transcript-time {
+    font-family: var(--mono);
+    font-size: 10px;
+    color: var(--text-dimmer);
+    min-width: 52px;
+    padding-top: 2px;
+    flex-shrink: 0;
+  }
+  .transcript-text {
+    font-size: 13px;
+    line-height: 1.6;
+    color: var(--text);
+  }
+  .transcript-seg.highlighted {
+    background: var(--accent-glow);
+    border-left: 2px solid var(--accent);
+    padding-left: 14px;
+  }
+  .transcript-seg.highlighted .transcript-time { color: var(--accent); }
+
+  /* ── AI Suggestion Card ── */
+  .ai-card {
+    background: var(--surface);
+    border: 1px solid rgba(244, 63, 94, 0.25);
+    border-radius: var(--radius);
+    padding: 14px 16px;
+    margin-top: 12px;
+  }
+  .ai-card-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 8px;
+  }
+  .ai-card-label {
+    font-family: var(--mono);
+    font-size: 10px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 1.5px;
+    color: var(--accent);
+  }
+  .ai-card-range {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--text-dim);
+  }
+  .ai-card-reasoning {
+    font-size: 13px;
+    line-height: 1.5;
+    color: var(--text-dim);
+    margin-bottom: 8px;
+  }
+  .ai-card-duration {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--text-dimmer);
+  }
+  .ai-banner {
+    padding: 10px 16px;
+    border-radius: var(--radius);
+    font-size: 12px;
+    margin-bottom: 16px;
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    color: var(--text-dim);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  /* ── Trim Editor ── */
+  .trim-editor {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    margin-top: 12px;
+    overflow: hidden;
+  }
+  .trim-video-wrap {
+    background: #000;
+    position: relative;
+  }
+  .trim-video-wrap video {
+    width: 100%;
+    display: block;
+    max-height: 340px;
+    object-fit: contain;
+  }
+  .trim-video-overlay {
+    position: absolute;
+    bottom: 8px;
+    left: 12px;
+    right: 12px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .trim-play-btn {
+    width: 32px; height: 32px;
+    background: rgba(0,0,0,0.6);
+    border: 1px solid rgba(255,255,255,0.2);
+    border-radius: 50%;
+    color: #fff;
+    font-size: 12px;
+    cursor: pointer;
+    display: grid; place-items: center;
+    padding: 0;
+    flex-shrink: 0;
+  }
+  .trim-play-btn:hover { background: rgba(0,0,0,0.8); }
+  .trim-timecode {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: rgba(255,255,255,0.7);
+    background: rgba(0,0,0,0.5);
+    padding: 2px 8px;
+    border-radius: 4px;
+  }
+  .trim-waveform-wrap {
+    padding: 12px 16px;
+    position: relative;
+    cursor: crosshair;
+  }
+  .trim-waveform-wrap canvas {
+    width: 100%;
+    height: 80px;
+    display: block;
+  }
+  .trim-controls {
+    padding: 10px 16px;
+    border-top: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex-wrap: wrap;
+  }
+  .trim-time-input {
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: var(--text);
+    font-family: var(--mono);
+    font-size: 11px;
+    padding: 5px 8px;
+    width: 70px;
+    text-align: center;
+    outline: none;
+  }
+  .trim-time-input:focus { border-color: var(--accent); }
+  .trim-label {
+    font-family: var(--mono);
+    font-size: 9px;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    color: var(--text-dimmer);
+  }
+  .trim-duration {
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--text-dim);
+    margin-left: auto;
+  }
+  .trim-duration.warn { color: var(--yellow); }
+  .trim-actions {
+    padding: 10px 16px;
+    border-top: 1px solid var(--border);
+    display: flex;
+    gap: 8px;
+    justify-content: flex-end;
+  }
+  .trim-kbd-hint {
+    padding: 6px 16px;
+    border-top: 1px solid var(--border);
+    font-family: var(--mono);
+    font-size: 10px;
+    color: var(--text-dimmer);
+    line-height: 1.6;
+  }
+  .trim-kbd-hint kbd {
+    background: var(--surface-3);
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    padding: 1px 5px;
+    font-family: var(--mono);
+    font-size: 9px;
+    color: var(--text-dim);
+  }
+
+  /* ── History ── */
+  .session-list { display: flex; flex-direction: column; gap: 8px; }
+
+  .session-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 14px 16px;
+    cursor: pointer;
+    transition: border-color 0.15s;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+  .session-card:hover { border-color: var(--border-hover); }
+
+  .session-left { min-width: 0; }
+  .session-url {
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--text);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 400px;
+    margin-bottom: 4px;
+  }
+  .session-meta {
+    font-size: 12px;
+    color: var(--text-dim);
+  }
+  .session-right {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-shrink: 0;
+  }
+  .session-count {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--text-dim);
+  }
+  .delete-btn {
+    width: 28px; height: 28px;
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: 6px;
+    color: var(--text-dimmer);
+    font-size: 13px;
+    cursor: pointer;
+    display: grid; place-items: center;
+    transition: all 0.15s;
+    padding: 0;
+  }
+  .delete-btn:hover { background: var(--red-dim); color: var(--red); border-color: var(--red-border); }
+
+  /* ── Settings Modal ── */
+  .modal-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.6);
+    z-index: 100;
+    display: none;
+    place-items: center;
+  }
+  .modal-overlay.show { display: grid; }
+
+  .modal {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 24px;
+    width: 90%;
+    max-width: 440px;
+    max-height: 85vh;
+    overflow-y: auto;
+  }
+  .modal-title {
+    font-family: var(--mono);
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 1.5px;
+    color: var(--accent);
+    margin-bottom: 18px;
+  }
+  .modal .field { margin-bottom: 16px; }
+  .modal-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+    margin-top: 20px;
+  }
+
+  /* ── Empty state ── */
+  .empty {
+    text-align: center;
+    padding: 48px 24px;
+    color: var(--text-dimmer);
+  }
+  .empty-icon { font-size: 36px; margin-bottom: 12px; opacity: 0.5; }
+  .empty-title { font-size: 15px; color: var(--text-dim); margin-bottom: 6px; }
+  .empty-sub { font-size: 13px; }
+
+  /* ── Section Label ── */
+  .section-label {
+    font-family: var(--mono);
+    font-size: 10px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 1.5px;
+    color: var(--text-dimmer);
+    margin-bottom: 10px;
+  }
+
+  /* ── Progress bar (for clips view) ── */
+  .session-progress {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 12px 16px;
+    margin-bottom: 14px;
+  }
+  .progress-bar {
+    width: 100%;
+    height: 4px;
+    background: var(--surface-3);
+    border-radius: 2px;
+    overflow: hidden;
+    margin-bottom: 6px;
+  }
+  .progress-fill {
+    height: 100%;
+    background: var(--accent);
+    border-radius: 2px;
+    transition: width 0.4s ease;
+    width: 0%;
+  }
+  .progress-fill.done { background: var(--green); }
+  .progress-text {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--text-dim);
+  }
+
+  /* ── Toast ── */
+  .error-toast {
+    position: fixed;
+    bottom: 24px;
+    left: 50%;
+    transform: translateX(-50%) translateY(80px);
+    background: var(--red-dim);
+    border: 1px solid var(--red-border);
+    color: var(--red);
+    font-family: var(--mono);
+    font-size: 12px;
+    padding: 10px 20px;
+    border-radius: var(--radius);
+    opacity: 0;
+    transition: all 0.3s;
+    z-index: 1000;
+    pointer-events: none;
+  }
+  .error-toast.show {
+    opacity: 1;
+    transform: translateX(-50%) translateY(0);
+  }
+
+  /* ── Preview table ── */
+  .table-wrap {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    overflow: hidden;
+  }
+  table { width: 100%; border-collapse: collapse; }
+  th {
+    font-family: var(--mono);
+    font-size: 9px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    color: var(--text-dimmer);
+    text-align: left;
+    padding: 8px 12px;
+    border-bottom: 1px solid var(--border);
+  }
+  td {
+    font-size: 12px;
+    padding: 9px 12px;
+    border-bottom: 1px solid var(--border);
+  }
+  tr:last-child td { border-bottom: none; }
+  .cell-note { font-family: var(--sans); font-weight: 500; font-size: 13px; }
+  .cell-mono { font-family: var(--mono); color: var(--text-dim); font-size: 11px; }
+
+  /* ── Responsive ── */
+  @media (max-width: 520px) {
+    .app { padding: 16px 14px 48px; }
+    .row { flex-direction: column; gap: 0; }
+    .btn-row { flex-direction: column; }
+    .session-url { max-width: 200px; }
+  }
+</style>
+</head>
+<body>
+<div class="app">
+
+  <!-- Header -->
+  <div class="header">
+    <div class="logo-row">
+      <div class="logo-mark">&#9986;</div>
+      <div class="logo-text">ClipCutter</div>
+    </div>
+    <div class="header-actions">
+      <button class="icon-btn" onclick="openSettings()" title="Settings">&#9881;</button>
+    </div>
+  </div>
+
+  <!-- Tabs -->
+  <div class="tabs">
+    <button class="tab active" data-view="new" onclick="switchView('new')">New Session</button>
+    <button class="tab" data-view="clips" onclick="switchView('clips')">Clips</button>
+    <button class="tab" data-view="history" onclick="switchView('history')">History</button>
+  </div>
+
+  <!-- Setup check -->
+  <div class="setup-banner" id="setupBanner"></div>
+
+  <!-- ══ NEW SESSION VIEW ══ -->
+  <div class="view active" id="view-new">
+    <div id="welcomeHint" class="ai-banner" style="display:none;">&#127916; Paste a YouTube livestream URL — ClipCutter will find the best clips automatically</div>
+    <div class="field">
+      <label>YouTube URL</label>
+      <input type="text" id="url" placeholder="https://www.youtube.com/watch?v=...">
+      <div class="hint">ClipCutter downloads auto-captions and uses Claude to suggest the strongest clippable moments.</div>
+    </div>
+    <div class="btn-row">
+      <button class="btn-primary" id="startBtn" onclick="startSession()">&#9654; Scan Livestream</button>
+    </div>
+  </div>
+
+  <!-- ══ CLIPS VIEW ══ -->
+  <div class="view" id="view-clips">
+    <div id="clipsContent">
+      <div class="empty">
+        <div class="empty-icon">&#9986;</div>
+        <div class="empty-title">No active session</div>
+        <div class="empty-sub">Create a new session to get started</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ══ HISTORY VIEW ══ -->
+  <div class="view" id="view-history">
+    <div id="historyContent">
+      <div class="empty">
+        <div class="empty-icon">&#128197;</div>
+        <div class="empty-title">No sessions yet</div>
+        <div class="empty-sub">Your past sessions will appear here</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Toast -->
+  <div class="error-toast" id="toast"></div>
+
+  <!-- Settings Modal -->
+  <div class="modal-overlay" id="settingsModal">
+    <div class="modal">
+      <div class="modal-title">Settings</div>
+      <div class="field">
+        <label>Claude API Key</label>
+        <input type="password" id="settingsApiKey" placeholder="sk-ant-...">
+        <div class="hint">Required for AI clip suggestions and title generation</div>
+      </div>
+      <div class="field">
+        <label>Channel Profile</label>
+        <textarea id="settingsChannelProfile" placeholder="e.g. Finance & investing channel. Audience: retail investors. Tone: direct, data-driven." style="min-height:80px;"></textarea>
+        <div class="hint">Gives Claude context when generating titles and descriptions</div>
+      </div>
+      <div class="field">
+        <label>Default clip window (mins)</label>
+        <input type="number" id="settingsClipWindow" value="5" min="1" max="30">
+      </div>
+      <div class="field">
+        <label>Target short duration (secs)</label>
+        <input type="number" id="settingsTargetDuration" value="60" min="15" max="180">
+      </div>
+      <div class="modal-actions">
+        <button class="btn-ghost btn-sm" onclick="closeSettings()">Cancel</button>
+        <button class="btn-primary btn-sm" onclick="saveSettings()">Save</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+
+const ACTIVE_STATUSES = ['queued', 'downloading', 'transcribing', 'analyzing', 'exporting'];
+const TRANSCRIPT_STATUSES = ['transcribed', 'ready', 'exported'];
+let hasApiKey = false;
+const EMPTY_CLIPS = `<div class="empty"><div class="empty-icon">&#9986;</div><div class="empty-title">No active session</div><div class="empty-sub">Create a new session to get started</div></div>`;
+const EMPTY_HISTORY = `<div class="empty"><div class="empty-icon">&#128197;</div><div class="empty-title">No sessions yet</div><div class="empty-sub">Your past sessions will appear here</div></div>`;
+
+let currentSessionId = null;
+let selectedClipId = null;
+let transcriptCache = {};
+let clipDataCache = {};
+let pollTimer = null;
+let currentSuggestions = [];
+
+// ── Utilities ──
+function esc(s) {
+  const d = document.createElement('div');
+  d.textContent = s;
+  return d.innerHTML;
+}
+
+function toast(msg) {
+  const t = $('toast');
+  t.textContent = msg;
+  t.classList.add('show');
+  setTimeout(() => t.classList.remove('show'), 4000);
+}
+
+function timeAgo(dateStr) {
+  const d = new Date(dateStr + 'Z');
+  const now = new Date();
+  const diff = Math.floor((now - d) / 1000);
+  if (diff < 60) return 'just now';
+  if (diff < 3600) return Math.floor(diff / 60) + 'm ago';
+  if (diff < 86400) return Math.floor(diff / 3600) + 'h ago';
+  return Math.floor(diff / 86400) + 'd ago';
+}
+
+function shortUrl(url) {
+  try {
+    const u = new URL(url);
+    return u.hostname + u.pathname.slice(0, 30);
+  } catch { return url.slice(0, 40); }
+}
+
+// ── View Switching ──
+function switchView(name) {
+  document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.dataset.view === name));
+  document.querySelectorAll('.view').forEach(v => v.classList.toggle('active', v.id === 'view-' + name));
+
+  if (name === 'history') loadHistory();
+  if (name === 'clips' && currentSessionId) loadSession(currentSessionId);
+}
+
+// ── Dep check + config ──
+(async () => {
+  try {
+    const [checkRes, configRes] = await Promise.all([
+      fetch('/api/check'),
+      fetch('/api/config'),
+    ]);
+    const d = await checkRes.json();
+    const config = await configRes.json();
+    hasApiKey = config.has_api_key;
+
+    const b = $('setupBanner');
+    if (!d.ok) {
+      b.className = 'setup-banner warn';
+      const cmds = d.missing.map(m => {
+        if (m === 'ffmpeg') return '<code>brew install ffmpeg</code>';
+        if (m === 'yt-dlp') return '<code>pip install yt-dlp</code>';
+        return '<code>install ' + m + '</code>';
+      }).join(' and ');
+      b.innerHTML = '&#9888;&#65039; <div>Missing: <strong>' + d.missing.join(', ') + '</strong>. Install with ' + cmds + ' then relaunch.</div>';
+    }
+    // Show welcome hint if no sessions yet
+    const sessRes = await fetch('/api/sessions');
+    const sessData = await sessRes.json();
+    if (!sessData.sessions || sessData.sessions.length === 0) {
+      const hint = $('welcomeHint');
+      if (hint) hint.style.display = 'flex';
+    }
+  } catch(e) {}
+})();
+
+// ── Preview ──
+async function previewTimestamps() {
+  // Legacy function — kept for API compatibility but no longer called from UI
+}
+
+// ── Start Session ──
+async function startSession() {
+  const url = $('url').value.trim();
+  if (!url) { toast('Enter a YouTube URL'); return; }
+
+  $('startBtn').disabled = true;
+  $('startBtn').textContent = 'Starting...';
+
+  try {
+    const r = await fetch('/api/sessions', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({url}),
+    });
+    const d = await r.json();
+    if (d.error) { toast(d.error); return; }
+
+    currentSessionId = d.session_id;
+    $('url').value = '';
+    switchView('clips');
+    renderScanState({});
+    startPolling(d.session_id);
+  } catch(e) {
+    toast('Failed to create session');
+  } finally {
+    $('startBtn').disabled = false;
+    $('startBtn').textContent = '▶ Scan Livestream';
+  }
+}
+
+// ── Load & render session ──
+async function loadSession(sessionId) {
+  try {
+    const r = await fetch(`/api/sessions/${sessionId}`);
+    const session = await r.json();
+    if (session.error) { toast(session.error); return; }
+
+    currentSessionId = sessionId;
+    await renderSession(session);
+  } catch(e) {
+    toast('Failed to load session');
+  }
+}
+
+async function renderSession(session) {
+  const phase = session.gather_phase || '';
+
+  if (phase === 'scanning') {
+    renderScanState(session);
+  } else if (phase === 'selecting' || phase === 'no_captions') {
+    stopPolling();
+    const r2 = await fetch(`/api/sessions/${session.id}/suggestions`);
+    const d = await r2.json();
+    renderSuggestionsPanel(session, d.suggestions || []);
+  } else if (phase === 'error') {
+    stopPolling();
+    $('clipsContent').innerHTML = `<div class="empty">
+      <div class="empty-icon">&#10060;</div>
+      <div class="empty-title">Scan failed</div>
+      <div class="empty-sub">${esc(session.video_title || 'An error occurred. Please try again.')}</div>
+    </div>`;
+  } else {
+    // 'collecting' or '' (old sessions) — show clips view
+    renderClips(session);
+    const active = (session.clips || []).some(c => ACTIVE_STATUSES.includes(c.status));
+    if (active) startPolling(session.id);
+    else stopPolling();
+  }
+}
+
+function renderClips(session) {
+  const clips = session.clips || [];
+  clipDataCache = {};
+  clips.forEach(c => { clipDataCache[c.id] = c; });
+  const total = clips.length;
+  const done = clips.filter(c => !ACTIVE_STATUSES.includes(c.status)).length;
+  const allDone = done === total && total > 0;
+
+  let html = '';
+
+  // No API key banner
+  if (!hasApiKey) {
+    html += `<div class="ai-banner">&#9881; Add your Claude API key in Settings to enable AI clip suggestions</div>`;
+  }
+
+  // Session header
+  html += `<div class="section-label">Session</div>`;
+  html += `<div class="session-progress">`;
+  html += `<div class="progress-bar"><div class="progress-fill ${allDone ? 'done' : ''}" style="width:${total > 0 ? (done/total*100) : 0}%"></div></div>`;
+  html += `<div class="progress-text">${done}/${total} clips ${allDone ? 'ready' : 'processing'} &middot; ${esc(shortUrl(session.youtube_url))}</div>`;
+  html += `</div>`;
+
+  // Clip cards
+  html += `<div class="clip-cards">`;
+  clips.forEach(c => {
+    const hasTranscript = TRANSCRIPT_STATUSES.includes(c.status);
+    const isSelected = selectedClipId === c.id;
+    const cardClass = `clip-card${hasTranscript ? ' clickable' : ''}${isSelected ? ' selected' : ''}`;
+    const onclick = hasTranscript ? `onclick="toggleTranscript('${c.id}')"` : '';
+    const statusLabel = c.status === 'downloaded' ? 'done' : c.status;
+    html += `<div class="${cardClass}" ${onclick}>
+      <div class="clip-status ${c.status}"></div>
+      <div class="clip-info">
+        <div class="clip-note">${esc(c.note || 'Untitled clip')}</div>
+        <div class="clip-meta">${c.center_hms} &middot; ${c.duration_min}m window &middot; ${c.start_hms} → ${c.end_hms}</div>
+        ${c.status === 'error' && c.error_text ? `<div class="clip-error">${esc(c.error_text.slice(0, 80))}</div>` : ''}
+      </div>
+      <div class="clip-actions">
+        <div class="clip-badge ${c.status}">${esc(statusLabel)}</div>
+        ${c.status === 'error' ? `<button class="btn-ghost btn-sm" onclick="event.stopPropagation(); retryClip('${c.id}')" style="padding:3px 10px;font-size:10px;">Retry</button>` : ''}
+      </div>
+    </div>`;
+  });
+  html += `</div>`;
+
+  // AI suggestion + trim editor + copy panel + transcript panel placeholders
+  html += `<div id="aiSuggestionCard"></div>`;
+  html += `<div id="trimEditor"></div>`;
+  html += `<div id="copyPanel"></div>`;
+  html += `<div id="transcriptPanel"></div>`;
+
+  // Open folder button when all done
+  if (allDone) {
+    const readyCount = clips.filter(c => c.status === 'ready').length;
+    const exportedCount = clips.filter(c => c.status === 'exported').length;
+    if (readyCount > 0) {
+      html += `<button class="btn-primary" style="width:100%; margin-top:14px;" onclick="exportAll('${session.id}')">&#9986; Export all ${readyCount} clip${readyCount !== 1 ? 's' : ''}</button>`;
+    }
+    if (exportedCount > 0) {
+      html += `<button class="btn-ghost" style="width:100%; margin-top:8px; font-family:var(--mono); font-size:12px;" onclick="openExportFolder()">Open exports folder &#8599;</button>`;
+    }
+    html += `<button class="btn-ghost" style="width:100%; margin-top:8px; font-family:var(--mono); font-size:12px;" onclick="openSessionFolder('${session.id}')">Open raw clips folder &#8599;</button>`;
+  }
+
+  $('clipsContent').innerHTML = html;
+
+  // Re-render AI card + trim editor + copy panel + transcript if a clip is selected
+  if (selectedClipId) {
+    const selClip = clips.find(c => c.id === selectedClipId);
+    if (selClip && TRANSCRIPT_STATUSES.includes(selClip.status)) {
+      renderAiCard(selClip);
+      if (selClip.raw_file) renderTrimEditor(selClip);
+      renderCopyPanel(selClip);
+      loadTranscript(selectedClipId, selClip.note, selClip.ai_suggestion_start, selClip.ai_suggestion_end);
+    }
+  }
+}
+
+function renderAiCard(clip) {
+  const card = $('aiSuggestionCard');
+  if (!card) return;
+  if (clip.ai_suggestion_start == null || clip.ai_suggestion_end == null) {
+    card.innerHTML = '';
+    return;
+  }
+  const dur = Math.round(clip.ai_suggestion_end - clip.ai_suggestion_start);
+  card.innerHTML = `<div class="ai-card">
+    <div class="ai-card-header">
+      <div class="ai-card-label">AI Suggestion</div>
+      <div class="ai-card-range">${fmtTime(clip.ai_suggestion_start)} &rarr; ${fmtTime(clip.ai_suggestion_end)}</div>
+    </div>
+    ${clip.ai_reasoning ? `<div class="ai-card-reasoning">${esc(clip.ai_reasoning)}</div>` : ''}
+    <div class="ai-card-duration">${dur}s &middot; <a href="#" onclick="reAnalyze('${clip.id}'); return false;" style="color:var(--accent);text-decoration:none;">Re-analyze</a></div>
+  </div>`;
+}
+
+async function reAnalyze(clipId) {
+  await fetch(`/api/clips/${clipId}/analyze`, { method: 'POST' });
+  // Clear cache so transcript reloads with new highlight
+  delete transcriptCache[clipId];
+  if (currentSessionId) loadSession(currentSessionId);
+}
+
+function renderCopyPanel(clip) {
+  const panel = $('copyPanel');
+  if (!panel) return;
+
+  const title = (clip && clip.generated_title) || '';
+  const desc = (clip && clip.generated_description) || '';
+  const clipId = clip ? clip.id : '';
+
+  // Skip rebuild if nothing changed (called every 2s from poll)
+  if (copyPanelState && copyPanelState.clipId === clipId &&
+      copyPanelState.title === title && copyPanelState.desc === desc) return;
+  copyPanelState = { clipId, title, desc };
+
+  const hasContent = title || desc;
+
+  panel.innerHTML = `<div class="copy-panel">
+    <div class="copy-panel-header">
+      <div class="copy-panel-label">Title &amp; Description</div>
+      <button class="btn-ghost btn-sm" id="generateCopyBtn" onclick="generateCopy('${clipId}')" ${!hasApiKey ? 'disabled title="Add Claude API key in Settings"' : ''}>&#10024; Generate</button>
+    </div>
+    ${hasContent ? `
+    <div class="copy-field">
+      <div class="copy-field-label">Title</div>
+      <div class="copy-field-row">
+        <input type="text" class="copy-input" id="copyTitle" value="${esc(title)}"
+          oninput="saveCopyEdits('${clipId}')">
+        <button class="copy-btn" id="copyTitleBtn" onclick="copyToClipboard('copyTitleBtn', $('copyTitle').value)">Copy</button>
+      </div>
+    </div>
+    <div class="copy-field">
+      <div class="copy-field-label">Description</div>
+      <div class="copy-field-row">
+        <textarea class="copy-textarea-el" id="copyDesc" rows="3"
+          oninput="saveCopyEdits('${clipId}')">${esc(desc)}</textarea>
+        <button class="copy-btn" id="copyDescBtn" onclick="copyToClipboard('copyDescBtn', $('copyDesc').value)">Copy</button>
+      </div>
+    </div>
+    ` : `<div class="copy-empty">${hasApiKey ? 'Click Generate to create a title and description with Claude.' : 'Add a Claude API key in Settings to enable copy generation.'}</div>`}
+  </div>`;
+}
+
+async function generateCopy(clipId) {
+  if (!clipId) return;
+  const initBtn = $('generateCopyBtn');
+  if (initBtn) { initBtn.disabled = true; initBtn.textContent = '...'; }
+
+  try {
+    const r = await fetch(`/api/clips/${clipId}/generate-copy`, { method: 'POST' });
+    const d = await r.json();
+    if (d.error) { toast(d.error); return; }
+
+    if (clipDataCache[clipId]) {
+      clipDataCache[clipId].generated_title = d.title;
+      clipDataCache[clipId].generated_description = d.description;
+    }
+    copyPanelState = null; // force re-render with new content
+    renderCopyPanel(clipDataCache[clipId] || { id: clipId, generated_title: d.title, generated_description: d.description });
+  } catch(e) {
+    toast('Failed to generate copy');
+  } finally {
+    // Re-query: renderCopyPanel may have replaced the DOM node
+    const freshBtn = $('generateCopyBtn');
+    if (freshBtn) { freshBtn.disabled = false; freshBtn.innerHTML = '&#10024; Generate'; }
+  }
+}
+
+function copyToClipboard(btnId, text) {
+  if (!text) return;
+  navigator.clipboard.writeText(text).then(() => {
+    const btn = $(btnId);
+    if (!btn) return;
+    const prev = btn.textContent;
+    btn.textContent = 'Copied!';
+    btn.classList.add('copied');
+    setTimeout(() => { btn.textContent = prev; btn.classList.remove('copied'); }, 1500);
+  }).catch(() => toast('Copy failed'));
+}
+
+let _copyEditTimer = null;
+function saveCopyEdits(clipId) {
+  clearTimeout(_copyEditTimer);
+  _copyEditTimer = setTimeout(async () => {
+    const title = $('copyTitle') ? $('copyTitle').value : '';
+    const description = $('copyDesc') ? $('copyDesc').value : '';
+    if (clipDataCache[clipId]) {
+      clipDataCache[clipId].generated_title = title;
+      clipDataCache[clipId].generated_description = description;
+    }
+    await fetch(`/api/clips/${clipId}/copy`, {
+      method: 'PUT',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({title, description}),
+    });
+  }, 600);
+}
+
+function seekTo(seconds) {
+  const video = $('trimVideo');
+  if (video) {
+    video.currentTime = seconds;
+    video.pause();
+    if ($('trimPlayBtn')) $('trimPlayBtn').innerHTML = '&#9654;';
+  }
+}
+
+function fmtTime(sec) {
+  const m = Math.floor(sec / 60);
+  const s = Math.floor(sec % 60);
+  return `${m}:${s.toString().padStart(2, '0')}`;
+}
+
+function toggleTranscript(clipId) {
+  document.querySelectorAll('.clip-card.selected').forEach(el => el.classList.remove('selected'));
+  if (selectedClipId === clipId) {
+    selectedClipId = null;
+    ['transcriptPanel', 'aiSuggestionCard', 'trimEditor', 'copyPanel'].forEach(id => {
+      const el = $(id); if (el) el.innerHTML = '';
+    });
+    trimState = null;
+    copyPanelState = null;
+    return;
+  }
+  selectedClipId = clipId;
+  event.currentTarget.classList.add('selected');
+  const clip = clipDataCache[clipId] || {};
+  renderAiCard(clip);
+  if (clip.raw_file) renderTrimEditor(clip);
+  renderCopyPanel(clip);
+  loadTranscript(clipId, clip.note || 'Clip', clip.ai_suggestion_start, clip.ai_suggestion_end);
+}
+
+function renderTranscriptHtml(data, clipId, clipNote, aiStart, aiEnd) {
+  const hasAi = aiStart != null && aiEnd != null;
+  let html = `<div class="transcript-panel">`;
+  html += `<div class="transcript-header">`;
+  html += `<div class="transcript-header-title">Transcript &middot; ${esc(clipNote || 'Clip')}</div>`;
+  html += `<button class="transcript-close" onclick="toggleTranscript('${clipId}')">&times;</button>`;
+  html += `</div>`;
+  html += `<div class="transcript-segments">`;
+  (data.segments || []).forEach(seg => {
+    const inRange = hasAi && seg.end > aiStart && seg.start < aiEnd;
+    html += `<div class="transcript-seg${inRange ? ' highlighted' : ''}" onclick="seekTo(${seg.start})">`;
+    html += `<div class="transcript-time">${fmtTime(seg.start)}</div>`;
+    html += `<div class="transcript-text">${esc(seg.text)}</div>`;
+    html += `</div>`;
+  });
+  html += `</div></div>`;
+  return html;
+}
+
+async function loadTranscript(clipId, clipNote, aiStart, aiEnd) {
+  const panel = $('transcriptPanel');
+  if (!panel) return;
+
+  // Use cache if available
+  if (transcriptCache[clipId]) {
+    panel.innerHTML = renderTranscriptHtml(transcriptCache[clipId], clipId, clipNote, aiStart, aiEnd);
+    return;
+  }
+
+  panel.innerHTML = `<div class="transcript-panel"><div style="padding:16px;color:var(--text-dim);font-size:12px;">Loading transcript...</div></div>`;
+
+  try {
+    const r = await fetch(`/api/clips/${clipId}/transcript`);
+    const data = await r.json();
+    if (data.error) {
+      panel.innerHTML = `<div class="transcript-panel"><div style="padding:16px;color:var(--text-dimmer);font-size:12px;">${esc(data.error)}</div></div>`;
+      return;
+    }
+    transcriptCache[clipId] = data;
+    panel.innerHTML = renderTranscriptHtml(data, clipId, clipNote, aiStart, aiEnd);
+  } catch(e) {
+    panel.innerHTML = `<div class="transcript-panel"><div style="padding:16px;color:var(--red);font-size:12px;">Failed to load transcript</div></div>`;
+  }
+}
+
+// ── Trim Editor ──
+let trimState = null; // {clipId, start, end, duration, lastHandle, videoEl, canvasEl}
+let copyPanelState = null; // {clipId, title, desc} — skip rebuild when nothing changed
+
+function renderTrimEditor(clip) {
+  const container = $('trimEditor');
+  if (!container) return;
+  // Don't re-render if already showing this clip (preserves video state + user edits)
+  if (trimState && trimState.clipId === clip.id) return;
+
+  // Initial trim values: final > AI suggestion > full clip
+  const trimStart = clip.final_start ?? clip.ai_suggestion_start ?? 0;
+  const trimEnd = clip.final_end ?? clip.ai_suggestion_end ?? (clip.window_seconds || 300);
+
+  container.innerHTML = `<div class="trim-editor">
+    <div class="trim-video-wrap">
+      <video id="trimVideo" preload="metadata" src="/api/clips/${clip.id}/video"></video>
+      <div class="trim-video-overlay">
+        <button class="trim-play-btn" id="trimPlayBtn" onclick="trimTogglePlay()">&#9654;</button>
+        <div class="trim-timecode" id="trimTimecode">0:00 / 0:00</div>
+      </div>
+    </div>
+    <div class="trim-waveform-wrap" id="trimWaveWrap">
+      <canvas id="trimWaveCanvas" height="80"></canvas>
+    </div>
+    <div class="trim-controls">
+      <div><div class="trim-label">In</div><input class="trim-time-input" id="trimInInput" value="${fmtTime(trimStart)}" onchange="trimInputChanged('start')"></div>
+      <div><div class="trim-label">Out</div><input class="trim-time-input" id="trimOutInput" value="${fmtTime(trimEnd)}" onchange="trimInputChanged('end')"></div>
+      <div class="trim-duration" id="trimDuration">${Math.round(trimEnd - trimStart)}s</div>
+    </div>
+    <div class="trim-controls" style="border-top:1px solid var(--border);">
+      <label style="margin-bottom:0;display:flex;align-items:center;gap:4px;cursor:pointer;">
+        <input type="checkbox" id="exportCaptions" checked style="accent-color:var(--accent);"> Captions
+      </label>
+      <label style="margin-bottom:0;display:flex;align-items:center;gap:4px;cursor:pointer;">
+        <input type="checkbox" id="exportVertical" checked style="accent-color:var(--accent);"> Vertical 9:16
+      </label>
+    </div>
+    <div class="trim-actions">
+      ${clip.ai_suggestion_start != null ? `<button class="btn-ghost btn-sm" onclick="trimUseAi()">Use AI suggestion</button>` : ''}
+      <button class="btn-ghost btn-sm" onclick="trimSave()">Save trim</button>
+      <button class="btn-primary btn-sm" onclick="exportClip('${clip.id}')">&#9986; Export Short</button>
+    </div>
+    <div class="trim-kbd-hint">
+      <kbd>Space</kbd> play/pause &nbsp; <kbd>I</kbd>/<kbd>O</kbd> set in/out &nbsp; <kbd>&#8592;</kbd>/<kbd>&#8594;</kbd> nudge 1s &nbsp; <kbd>Shift</kbd>+arrows 5s &nbsp; <kbd>J</kbd>/<kbd>K</kbd>/<kbd>L</kbd> rwd/pause/fwd
+    </div>
+  </div>`;
+
+  trimState = {
+    clipId: clip.id,
+    start: trimStart,
+    end: trimEnd,
+    duration: 0,
+    lastHandle: 'end',
+    aiStart: clip.ai_suggestion_start,
+    aiEnd: clip.ai_suggestion_end,
+  };
+
+  const video = $('trimVideo');
+  video.addEventListener('loadedmetadata', () => {
+    trimState.duration = video.duration;
+    video.currentTime = trimState.start;
+    loadWaveform(clip.id);
+  });
+  video.addEventListener('timeupdate', () => {
+    const t = video.currentTime;
+    $('trimTimecode').textContent = fmtTime(t) + ' / ' + fmtTime(trimState.duration);
+    // Constrain to trim range during playback
+    if (!video.paused && t >= trimState.end) {
+      video.pause();
+      video.currentTime = trimState.end;
+      $('trimPlayBtn').innerHTML = '&#9654;';
+    }
+    updateWaveformPlayhead();
+  });
+}
+
+function trimClampStart(val) {
+  if (!trimState) return val;
+  return Math.max(0, Math.min(val, trimState.end - 1));
+}
+function trimClampEnd(val) {
+  if (!trimState) return val;
+  return Math.max(trimState.start + 1, Math.min(val, trimState.duration || Infinity));
+}
+
+function trimTogglePlay() {
+  const video = $('trimVideo');
+  if (!video || !trimState) return;
+  if (video.paused) {
+    if (video.currentTime < trimState.start || video.currentTime >= trimState.end) {
+      video.currentTime = trimState.start;
+    }
+    video.play();
+    $('trimPlayBtn').innerHTML = '&#9646;&#9646;';
+  } else {
+    video.pause();
+    $('trimPlayBtn').innerHTML = '&#9654;';
+  }
+}
+
+function trimUpdateUI() {
+  if (!trimState) return;
+  $('trimInInput').value = fmtTime(trimState.start);
+  $('trimOutInput').value = fmtTime(trimState.end);
+  const dur = Math.round(trimState.end - trimState.start);
+  const durEl = $('trimDuration');
+  durEl.textContent = dur + 's';
+  durEl.className = 'trim-duration' + (dur > 60 ? ' warn' : '');
+  drawWaveform();
+}
+
+function trimInputChanged(which) {
+  if (!trimState) return;
+  const input = which === 'start' ? $('trimInInput') : $('trimOutInput');
+  const parts = input.value.split(':');
+  if (parts.length !== 2) return;
+  const secs = parseInt(parts[0]) * 60 + parseFloat(parts[1]);
+  if (isNaN(secs)) return;
+  if (which === 'start') {
+    trimState.start = trimClampStart(secs);
+    trimState.lastHandle = 'start';
+  } else {
+    trimState.end = trimClampEnd(secs);
+    trimState.lastHandle = 'end';
+  }
+  const video = $('trimVideo');
+  if (video) video.currentTime = which === 'start' ? trimState.start : trimState.end;
+  trimUpdateUI();
+}
+
+function trimNudge(delta) {
+  if (!trimState) return;
+  const h = trimState.lastHandle;
+  if (h === 'start') {
+    trimState.start = trimClampStart(trimState.start + delta);
+  } else {
+    trimState.end = trimClampEnd(trimState.end + delta);
+  }
+  const video = $('trimVideo');
+  if (video) video.currentTime = h === 'start' ? trimState.start : trimState.end;
+  trimUpdateUI();
+}
+
+function trimUseAi() {
+  if (!trimState || trimState.aiStart == null) return;
+  trimState.start = trimState.aiStart;
+  trimState.end = trimState.aiEnd;
+  const video = $('trimVideo');
+  if (video) video.currentTime = trimState.start;
+  trimUpdateUI();
+}
+
+async function trimSave() {
+  if (!trimState) return;
+  await fetch(`/api/clips/${trimState.clipId}/trim`, {
+    method: 'PUT',
+    headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({start: trimState.start, end: trimState.end}),
+  });
+  toast('Trim saved');
+}
+
+function getExportOptions() {
+  return {
+    captions: $('exportCaptions') ? $('exportCaptions').checked : true,
+    vertical: $('exportVertical') ? $('exportVertical').checked : true,
+  };
+}
+
+async function exportClip(clipId) {
+  if (trimState && trimState.clipId === clipId) await trimSave();
+  await fetch(`/api/clips/${clipId}/export`, {
+    method: 'POST',
+    headers: {'Content-Type':'application/json'},
+    body: JSON.stringify(getExportOptions()),
+  });
+  trimState = null;
+  toast('Export started');
+  if (currentSessionId) { startPolling(currentSessionId); loadSession(currentSessionId); }
+}
+
+async function exportAll(sessionId) {
+  await fetch(`/api/sessions/${sessionId}/export-all`, {
+    method: 'POST',
+    headers: {'Content-Type':'application/json'},
+    body: JSON.stringify(getExportOptions()),
+  });
+  toast('Batch export started');
+  if (currentSessionId) { startPolling(currentSessionId); loadSession(currentSessionId); }
+}
+
+async function openExportFolder() {
+  await fetch('/api/open-folder', {
+    method: 'POST',
+    headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({}),
+  });
+}
+
+async function retryClip(clipId) {
+  await fetch(`/api/clips/${clipId}/retry`, { method: 'POST' });
+  toast('Retrying clip');
+  if (currentSessionId) { startPolling(currentSessionId); loadSession(currentSessionId); }
+}
+
+// ── Waveform ──
+let waveformData = null;
+let waveformBaseImage = null; // cached ImageData of base waveform (without playhead)
+let waveformDims = null; // {w, h, dpr} — cached canvas dimensions
+
+async function loadWaveform(clipId) {
+  try {
+    const r = await fetch(`/api/clips/${clipId}/waveform`);
+    waveformData = await r.json();
+    waveformBaseImage = null;
+    drawWaveform();
+  } catch(e) { waveformData = null; }
+}
+
+function initWaveformCanvas() {
+  const canvas = $('trimWaveCanvas');
+  if (!canvas) return null;
+  const dpr = window.devicePixelRatio || 1;
+  const rect = canvas.getBoundingClientRect();
+  const w = rect.width;
+  const h = rect.height;
+  if (!waveformDims || waveformDims.w !== w || waveformDims.h !== h) {
+    canvas.width = w * dpr;
+    canvas.height = h * dpr;
+    waveformDims = {w, h, dpr};
+    waveformBaseImage = null;
+  }
+  return {canvas, ctx: canvas.getContext('2d'), w, h, dpr};
+}
+
+function drawWaveform() {
+  const info = initWaveformCanvas();
+  if (!info || !waveformData || !trimState) return;
+  const {canvas, ctx, w, h, dpr} = info;
+  const peaks = waveformData.peaks || [];
+  const dur = trimState.duration || waveformData.duration || 1;
+
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, w, h);
+
+  // AI suggestion background
+  if (trimState.aiStart != null && trimState.aiEnd != null) {
+    const ax1 = (trimState.aiStart / dur) * w;
+    const ax2 = (trimState.aiEnd / dur) * w;
+    ctx.fillStyle = 'rgba(244, 63, 94, 0.06)';
+    ctx.fillRect(ax1, 0, ax2 - ax1, h);
+  }
+
+  // Trim selection overlay
+  const sx = (trimState.start / dur) * w;
+  const ex = (trimState.end / dur) * w;
+  ctx.fillStyle = 'rgba(244, 63, 94, 0.12)';
+  ctx.fillRect(sx, 0, ex - sx, h);
+
+  // Waveform bars
+  const barW = Math.max(1, w / peaks.length - 0.5);
+  peaks.forEach((p, i) => {
+    const x = (i / peaks.length) * w;
+    const barH = p * h * 0.85;
+    const inSel = x >= sx && x <= ex;
+    ctx.fillStyle = inSel ? 'rgba(244, 63, 94, 0.6)' : 'rgba(255, 255, 255, 0.15)';
+    ctx.fillRect(x, (h - barH) / 2, barW, barH);
+  });
+
+  // Trim handles
+  [sx, ex].forEach(hx => {
+    ctx.fillStyle = '#f43f5e';
+    ctx.fillRect(hx - 1.5, 0, 3, h);
+    ctx.beginPath();
+    ctx.roundRect(hx - 5, h/2 - 10, 10, 20, 3);
+    ctx.fill();
+    ctx.fillStyle = '#fff';
+    ctx.fillRect(hx - 2, h/2 - 4, 1, 8);
+    ctx.fillRect(hx + 1, h/2 - 4, 1, 8);
+  });
+
+  // Cache base image for playhead overlay
+  waveformBaseImage = ctx.getImageData(0, 0, canvas.width, canvas.height);
+}
+
+function updateWaveformPlayhead() {
+  const canvas = $('trimWaveCanvas');
+  const video = $('trimVideo');
+  if (!canvas || !video || !trimState || !waveformBaseImage) return;
+  const ctx = canvas.getContext('2d');
+  // Restore cached base image instead of full redraw
+  ctx.putImageData(waveformBaseImage, 0, 0);
+  const {w, h, dpr} = waveformDims || {};
+  if (!w) return;
+  const dur = trimState.duration || 1;
+  const px = (video.currentTime / dur) * w;
+  ctx.save();
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.fillStyle = '#fff';
+  ctx.fillRect(px - 0.5, 0, 1, h);
+  ctx.restore();
+}
+
+// Waveform click-to-seek + drag
+(function() {
+  let dragging = null; // 'start', 'end', or 'seek'
+
+  document.addEventListener('mousedown', (e) => {
+    const wrap = $('trimWaveWrap');
+    if (!wrap || !trimState || !wrap.contains(e.target)) return;
+    const rect = wrap.querySelector('canvas').getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const w = rect.width;
+    const dur = trimState.duration || 1;
+    const sx = (trimState.start / dur) * w;
+    const ex = (trimState.end / dur) * w;
+
+    // Check if near a handle (within 8px)
+    if (Math.abs(x - sx) < 8) { dragging = 'start'; trimState.lastHandle = 'start'; }
+    else if (Math.abs(x - ex) < 8) { dragging = 'end'; trimState.lastHandle = 'end'; }
+    else { dragging = 'seek'; }
+    handleDrag(e, rect, dur, w);
+  });
+
+  document.addEventListener('mousemove', (e) => {
+    if (!dragging || !trimState) return;
+    const canvas = $('trimWaveCanvas');
+    if (!canvas) return;
+    const rect = canvas.getBoundingClientRect();
+    handleDrag(e, rect, trimState.duration || 1, rect.width);
+  });
+
+  document.addEventListener('mouseup', () => { dragging = null; });
+
+  function handleDrag(e, rect, dur, w) {
+    const x = Math.max(0, Math.min(e.clientX - rect.left, w));
+    const t = (x / w) * dur;
+    const video = $('trimVideo');
+
+    if (dragging === 'start') {
+      trimState.start = trimClampStart(t);
+      if (video) video.currentTime = trimState.start;
+      trimUpdateUI();
+    } else if (dragging === 'end') {
+      trimState.end = trimClampEnd(t);
+      if (video) video.currentTime = trimState.end;
+      trimUpdateUI();
+    } else if (dragging === 'seek') {
+      if (video) video.currentTime = t;
+    }
+  }
+})();
+
+// ── Keyboard Shortcuts ──
+document.addEventListener('keydown', (e) => {
+  if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+  const mod = e.metaKey || e.ctrlKey;
+
+  // Global shortcuts (work regardless of trim state)
+  if (mod && e.key === 'n') {
+    e.preventDefault();
+    switchView('new');
+    setTimeout(() => { const el = $('url'); if (el) el.focus(); }, 50);
+    return;
+  }
+  if (mod && e.shiftKey && (e.key === 'e' || e.key === 'E')) {
+    e.preventDefault();
+    if (currentSessionId) exportAll(currentSessionId);
+    return;
+  }
+  if (mod && (e.key === 'e' || e.key === 'E')) {
+    e.preventDefault();
+    if (selectedClipId) exportClip(selectedClipId);
+    return;
+  }
+  if (e.key === 'Escape') {
+    if (selectedClipId) {
+      selectedClipId = null;
+      ['transcriptPanel', 'aiSuggestionCard', 'trimEditor', 'copyPanel'].forEach(id => {
+        const el = $(id); if (el) el.innerHTML = '';
+      });
+      trimState = null;
+      copyPanelState = null;
+      document.querySelectorAll('.clip-card.selected').forEach(el => el.classList.remove('selected'));
+    }
+    return;
+  }
+
+  // Trim editor shortcuts (only when trim editor is active)
+  if (!trimState) return;
+  const video = $('trimVideo');
+  switch(e.key) {
+    case ' ':
+      e.preventDefault();
+      trimTogglePlay();
+      break;
+    case 'ArrowLeft':
+      e.preventDefault();
+      trimNudge(e.shiftKey ? -5 : -1);
+      break;
+    case 'ArrowRight':
+      e.preventDefault();
+      trimNudge(e.shiftKey ? 5 : 1);
+      break;
+    case 'i': case 'I':
+      if (video && trimState) {
+        trimState.start = trimClampStart(video.currentTime);
+        trimState.lastHandle = 'start';
+        trimUpdateUI();
+      }
+      break;
+    case 'o': case 'O':
+      if (video && trimState) {
+        trimState.end = trimClampEnd(video.currentTime);
+        trimState.lastHandle = 'end';
+        trimUpdateUI();
+      }
+      break;
+    case 'j': case 'J':
+      if (video) { video.currentTime = Math.max(0, video.currentTime - 5); }
+      break;
+    case 'k': case 'K':
+      if (video) { video.pause(); $('trimPlayBtn').innerHTML = '&#9654;'; }
+      break;
+    case 'l': case 'L':
+      if (video) { video.currentTime = Math.min(video.currentTime + 5, trimState.duration); }
+      break;
+  }
+});
+
+async function openSessionFolder(sessionId) {
+  await fetch('/api/open-folder', {
+    method: 'POST',
+    headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({session_id: sessionId}),
+  });
+}
+
+// ── Polling ──
+function startPolling(sessionId) {
+  stopPolling();
+  pollTimer = setInterval(async () => {
+    try {
+      const r = await fetch(`/api/sessions/${sessionId}`);
+      const session = await r.json();
+      if (session.error) return;
+
+      const phase = session.gather_phase || '';
+      if (phase === 'scanning') {
+        renderScanState(session);
+      } else if (phase === 'selecting' || phase === 'no_captions' || phase === 'error') {
+        stopPolling();
+        await renderSession(session);
+      } else {
+        renderClips(session);
+        const active = (session.clips || []).some(c => ACTIVE_STATUSES.includes(c.status));
+        if (!active) stopPolling();
+      }
+    } catch(e) {}
+  }, 2000);
+}
+
+function stopPolling() {
+  if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+}
+
+// ── Phase A: Scan + Suggestions ──
+
+function renderScanState(session) {
+  const content = $('clipsContent');
+  if (!content || content.querySelector('.scan-state')) return;
+  const sub = session.video_title
+    ? esc(session.video_title)
+    : 'Downloading captions and analyzing with Claude…';
+  content.innerHTML = `<div class="scan-state">
+    <div class="scan-spinner">&#9654;</div>
+    <div class="scan-title">Scanning livestream…</div>
+    <div class="scan-sub">${sub}</div>
+  </div>`;
+}
+
+function renderSuggestionsPanel(session, suggestions) {
+  currentSuggestions = suggestions;
+  const content = $('clipsContent');
+  if (!content) return;
+
+  const aiSuggs = suggestions.filter(s => s.source === 'ai');
+  const manualSuggs = suggestions.filter(s => s.source === 'manual');
+  const selectedCount = suggestions.filter(s => s.selected).length;
+  const noCaptions = session.gather_phase === 'no_captions';
+
+  let html = '';
+
+  if (session.video_title) {
+    html += `<div class="section-label">Session</div>
+    <div class="session-progress" style="margin-bottom:16px;">
+      <div class="progress-text">&#127916; ${esc(session.video_title)}</div>
+    </div>`;
+  }
+
+  if (noCaptions) {
+    html += `<div class="ai-banner" style="margin-bottom:16px;">&#9888;&#65039; No auto-captions found for this video. Add segments manually below.</div>`;
+  } else if (!hasApiKey && aiSuggs.length === 0) {
+    html += `<div class="ai-banner" style="margin-bottom:16px;">&#9881; Add a Claude API key in Settings to get AI clip suggestions</div>`;
+  }
+
+  if (aiSuggs.length > 0) {
+    html += `<div class="section-label">AI Suggested Clips</div>`;
+    aiSuggs.forEach(s => { html += renderSuggestionCard(s, session.id); });
+  }
+
+  if (manualSuggs.length > 0) {
+    html += `<div class="section-label" style="margin-top:16px;">Custom Segments</div>`;
+    manualSuggs.forEach(s => { html += renderSuggestionCard(s, session.id); });
+  }
+
+  // Add segment form
+  html += `<div style="margin-top:16px;">
+    <div class="section-label">Add Custom Segment</div>
+    <div class="add-segment-row">
+      <input type="text" class="add-seg-input" id="segTimestamp" placeholder="1:48:00 or 1hr 48mins" style="flex:1">
+      <input type="text" class="add-seg-input" id="segNote" placeholder="Note (optional)" style="flex:2">
+      <button class="btn-ghost btn-sm" onclick="addManualSegment('${session.id}')">+ Add</button>
+    </div>
+  </div>`;
+
+  // YouTube Timestamps
+  if (selectedCount > 0) {
+    const tsText = getYtTimestamps();
+    html += `<div style="margin-top:16px;">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0;">
+        <div class="section-label" style="margin-bottom:0;">${selectedCount} clip${selectedCount !== 1 ? 's' : ''} selected — YouTube timestamps</div>
+        <button class="copy-btn" id="ytTimestampBtn" onclick="copyToClipboard('ytTimestampBtn', getYtTimestamps())">Copy</button>
+      </div>
+      <div class="yt-timestamps">${esc(tsText)}</div>
+    </div>`;
+  }
+
+  // Gather button
+  html += `<button class="btn-primary" style="width:100%;margin-top:20px;"
+    onclick="gatherSession('${session.id}')" ${selectedCount === 0 ? 'disabled' : ''}>
+    &#8595; Gather ${selectedCount} Clip${selectedCount !== 1 ? 's' : ''}
+  </button>`;
+
+  content.innerHTML = html;
+}
+
+function renderSuggestionCard(s, sessionId) {
+  const mins = Math.floor(s.timestamp_seconds / 60);
+  const secs = s.timestamp_seconds % 60;
+  const timeStr = `${mins}:${secs.toString().padStart(2, '0')}`;
+  const confColor = s.confidence === 'high' ? 'var(--green)' : 'var(--yellow)';
+  const title = s.suggested_title || s.note || 'clip';
+
+  return `<div class="sugg-card ${s.selected ? 'selected' : ''}">
+    <input type="checkbox" ${s.selected ? 'checked' : ''}
+      onchange="toggleSuggestion('${s.id}', this.checked, '${sessionId}')">
+    <div class="sugg-info">
+      <div class="sugg-title">${esc(title)}</div>
+      <div class="sugg-meta">${timeStr}${s.source === 'manual' ? ' · manual' : ''}</div>
+      ${s.reasoning ? `<div class="sugg-reasoning">${esc(s.reasoning.slice(0, 100))}</div>` : ''}
+    </div>
+    <div class="clip-actions">
+      ${s.confidence && s.source === 'ai'
+        ? `<span style="font-family:var(--mono);font-size:10px;color:${confColor};">${esc(s.confidence)}</span>` : ''}
+      ${s.source === 'manual'
+        ? `<button class="delete-btn" onclick="event.stopPropagation();deleteSegment('${sessionId}','${s.id}')" title="Remove">&#10005;</button>` : ''}
+    </div>
+  </div>`;
+}
+
+function getYtTimestamps() {
+  return currentSuggestions
+    .filter(s => s.selected)
+    .sort((a, b) => a.timestamp_seconds - b.timestamp_seconds)
+    .map(s => {
+      const h = Math.floor(s.timestamp_seconds / 3600);
+      const m = Math.floor((s.timestamp_seconds % 3600) / 60);
+      const sec = s.timestamp_seconds % 60;
+      const ts = h > 0
+        ? `${h}:${m.toString().padStart(2,'0')}:${sec.toString().padStart(2,'0')}`
+        : `${m}:${sec.toString().padStart(2,'0')}`;
+      return `${ts} - ${s.suggested_title || s.note || 'clip'}`;
+    })
+    .join('\n');
+}
+
+async function toggleSuggestion(suggId, selected, sessionId) {
+  await fetch(`/api/suggestions/${suggId}`, {
+    method: 'PUT',
+    headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({selected}),
+  });
+  // Update local state without re-fetching
+  const s = currentSuggestions.find(x => x.id === suggId);
+  if (s) s.selected = selected ? 1 : 0;
+  const r = await fetch(`/api/sessions/${sessionId}`);
+  const session = await r.json();
+  renderSuggestionsPanel(session, currentSuggestions);
+}
+
+async function addManualSegment(sessionId) {
+  const timestamp = $('segTimestamp').value.trim();
+  const note = $('segNote').value.trim();
+  if (!timestamp) { toast('Enter a timestamp'); return; }
+
+  const r = await fetch(`/api/sessions/${sessionId}/add-segment`, {
+    method: 'POST',
+    headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({timestamp, note}),
+  });
+  const d = await r.json();
+  if (d.error) { toast(d.error); return; }
+
+  currentSuggestions.push(d.suggestion);
+  const sr = await fetch(`/api/sessions/${sessionId}`);
+  const session = await sr.json();
+  renderSuggestionsPanel(session, currentSuggestions);
+}
+
+async function deleteSegment(sessionId, suggId) {
+  await fetch(`/api/sessions/${sessionId}/segments/${suggId}`, {method: 'DELETE'});
+  currentSuggestions = currentSuggestions.filter(s => s.id !== suggId);
+  const r = await fetch(`/api/sessions/${sessionId}`);
+  const session = await r.json();
+  renderSuggestionsPanel(session, currentSuggestions);
+}
+
+async function gatherSession(sessionId) {
+  await fetch(`/api/sessions/${sessionId}/gather`, {method: 'POST'});
+  currentSuggestions = [];
+  startPolling(sessionId);
+  loadSession(sessionId);
+}
+
+// ── History ──
+async function loadHistory() {
+  try {
+    const r = await fetch('/api/sessions');
+    const d = await r.json();
+
+    if (!d.sessions || d.sessions.length === 0) {
+      $('historyContent').innerHTML = EMPTY_HISTORY;
+      return;
+    }
+
+    let html = '<div class="section-label">Past Sessions</div><div class="session-list">';
+    d.sessions.forEach(s => {
+      html += `<div class="session-card">
+        <div class="session-left" onclick="openSession('${s.id}')">
+          <div class="session-url">${esc(shortUrl(s.youtube_url))}</div>
+          <div class="session-meta">${s.clip_count} clip${s.clip_count !== 1 ? 's' : ''} &middot; ${timeAgo(s.created_at)}</div>
+        </div>
+        <div class="session-right">
+          <div class="clip-badge ${s.overall_status}">${esc(s.overall_status)}</div>
+          <button class="delete-btn" onclick="event.stopPropagation(); deleteSession('${s.id}')" title="Delete session">&#10005;</button>
+        </div>
+      </div>`;
+    });
+    html += '</div>';
+    $('historyContent').innerHTML = html;
+  } catch(e) {
+    toast('Failed to load history');
+  }
+}
+
+function openSession(sessionId) {
+  currentSessionId = sessionId;
+  switchView('clips');
+  loadSession(sessionId);
+}
+
+async function deleteSession(sessionId) {
+  try {
+    await fetch(`/api/sessions/${sessionId}`, { method: 'DELETE' });
+    loadHistory();
+    if (currentSessionId === sessionId) {
+      currentSessionId = null;
+      $('clipsContent').innerHTML = EMPTY_CLIPS;
+    }
+  } catch(e) { toast('Failed to delete session'); }
+}
+
+// ── Settings ──
+async function openSettings() {
+  try {
+    const r = await fetch('/api/config');
+    const config = await r.json();
+    $('settingsApiKey').value = '';
+    $('settingsApiKey').placeholder = config.has_api_key ? config.api_key_preview : 'sk-ant-...';
+    $('settingsChannelProfile').value = config.channel_profile || '';
+    $('settingsClipWindow').value = config.default_clip_window || 5;
+    $('settingsTargetDuration').value = config.target_duration || 60;
+  } catch(e) {}
+  $('settingsModal').classList.add('show');
+}
+
+function closeSettings() {
+  $('settingsModal').classList.remove('show');
+}
+
+async function saveSettings() {
+  const updates = {
+    default_clip_window: parseInt($('settingsClipWindow').value) || 5,
+    target_duration: parseInt($('settingsTargetDuration').value) || 60,
+    channel_profile: $('settingsChannelProfile').value.trim(),
+  };
+  const apiKey = $('settingsApiKey').value.trim();
+  if (apiKey) updates.api_key = apiKey;
+
+  try {
+    await fetch('/api/config', {
+      method: 'PUT',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify(updates),
+    });
+    if (apiKey) hasApiKey = true;
+    closeSettings();
+    toast('Settings saved');
+  } catch(e) { toast('Failed to save settings'); }
+}
+
+// Close modal on overlay click
+$('settingsModal').addEventListener('click', function(e) {
+  if (e.target === this) closeSettings();
+});
+</script>
+</body>
+</html>
