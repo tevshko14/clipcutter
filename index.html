@@ -947,6 +947,65 @@
   .cell-note { font-family: var(--sans); font-weight: 500; font-size: 13px; }
   .cell-mono { font-family: var(--mono); color: var(--text-dim); font-size: 11px; }
 
+  /* ── Step Bar ── */
+  .step-bar {
+    display: flex;
+    align-items: center;
+    margin-bottom: 20px;
+  }
+  .step-item {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    flex: 1;
+    cursor: default;
+  }
+  .step-item:last-child { flex: none; }
+  .step-dot {
+    width: 26px; height: 26px;
+    border-radius: 50%;
+    display: grid; place-items: center;
+    font-family: var(--mono);
+    font-size: 11px;
+    font-weight: 700;
+    flex-shrink: 0;
+    border: 2px solid var(--border);
+    background: var(--surface);
+    color: var(--text-dimmer);
+    transition: all 0.2s;
+  }
+  .step-dot.active {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: #fff;
+    box-shadow: 0 0 12px var(--accent-glow);
+  }
+  .step-dot.done {
+    background: var(--green-dim);
+    border-color: var(--green-border);
+    color: var(--green);
+  }
+  .step-dot.clickable { cursor: pointer; }
+  .step-dot.clickable:hover { border-color: var(--accent); }
+  .step-label {
+    font-family: var(--mono);
+    font-size: 10px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: var(--text-dimmer);
+    white-space: nowrap;
+  }
+  .step-label.active { color: var(--text); }
+  .step-label.done { color: var(--green); }
+  .step-connector {
+    flex: 1;
+    height: 2px;
+    background: var(--border);
+    margin: 0 6px;
+  }
+  .step-connector.done { background: var(--green-border); }
+
   /* ── Responsive ── */
   @media (max-width: 520px) {
     .app { padding: 16px 14px 48px; }
@@ -995,6 +1054,27 @@
 
   <!-- ══ CLIPS VIEW ══ -->
   <div class="view" id="view-clips">
+    <div id="stepBar" style="display:none;" class="step-bar">
+      <div class="step-item">
+        <div class="step-dot active" id="stepDot1">1</div>
+        <div class="step-label active" id="stepLabel1">Gather</div>
+      </div>
+      <div class="step-connector" id="stepConn1"></div>
+      <div class="step-item">
+        <div class="step-dot" id="stepDot2">2</div>
+        <div class="step-label" id="stepLabel2">Trim</div>
+      </div>
+      <div class="step-connector" id="stepConn2"></div>
+      <div class="step-item">
+        <div class="step-dot" id="stepDot3">3</div>
+        <div class="step-label" id="stepLabel3">Title</div>
+      </div>
+      <div class="step-connector" id="stepConn3"></div>
+      <div class="step-item">
+        <div class="step-dot" id="stepDot4">4</div>
+        <div class="step-label" id="stepLabel4">Format</div>
+      </div>
+    </div>
     <div id="clipsContent">
       <div class="empty">
         <div class="empty-icon">&#9986;</div>
@@ -1100,6 +1180,7 @@ function switchView(name) {
   document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.dataset.view === name));
   document.querySelectorAll('.view').forEach(v => v.classList.toggle('active', v.id === 'view-' + name));
 
+  if (name !== 'clips') { const b = $('stepBar'); if (b) b.style.display = 'none'; }
   if (name === 'history') loadHistory();
   if (name === 'clips' && currentSessionId) loadSession(currentSessionId);
 }
@@ -1187,6 +1268,9 @@ async function loadSession(sessionId) {
 async function renderSession(session) {
   const phase = session.gather_phase || '';
 
+  // Show step bar for any active session
+  updateStepBar(session);
+
   if (phase === 'scanning') {
     renderScanState(session);
   } else if (phase === 'selecting' || phase === 'no_captions') {
@@ -1208,6 +1292,57 @@ async function renderSession(session) {
     if (active) startPolling(session.id);
     else stopPolling();
   }
+}
+
+function updateStepBar(session) {
+  const bar = $('stepBar');
+  if (!bar || !session || !session.id) { if (bar) bar.style.display = 'none'; return; }
+  bar.style.display = 'flex';
+
+  const phase = session.gather_phase || '';
+  const clips = session.clips || [];
+
+  // Determine which step is active based on state
+  // Step 1: Gather — scanning, selecting, collecting, or all clips queued/downloading/transcribing
+  // Step 2: Trim — clips are ready but none have final_start set yet
+  // Step 3: Title — at least one clip has final_start (trim saved)
+  // Step 4: Format — at least one clip has generated_title
+  const anyReady = clips.some(c => ['ready','exported'].includes(c.status));
+  const anyTrimmed = clips.some(c => c.final_start != null);
+  const anyTitled = clips.some(c => c.generated_title);
+  const anyExported = clips.some(c => c.status === 'exported');
+
+  let activeStep = 1;
+  if (anyExported) activeStep = 4;
+  else if (anyTitled) activeStep = 3;
+  else if (anyTrimmed) activeStep = 2;
+  else if (anyReady) activeStep = 2;
+
+  const steps = ['Gather','Trim','Title','Format'];
+  steps.forEach((name, i) => {
+    const n = i + 1;
+    const dot = $(`stepDot${n}`);
+    const label = $(`stepLabel${n}`);
+    const conn = $(`stepConn${n}`);
+    if (!dot) return;
+
+    dot.className = 'step-dot';
+    label.className = 'step-label';
+    if (conn) conn.className = 'step-connector';
+
+    if (n < activeStep) {
+      dot.className += ' done';
+      dot.innerHTML = '✓';
+      label.className += ' done';
+      if (conn) conn.className += ' done';
+    } else if (n === activeStep) {
+      dot.className += ' active';
+      dot.innerHTML = String(n);
+      label.className += ' active';
+    } else {
+      dot.innerHTML = String(n);
+    }
+  });
 }
 
 function renderClips(session) {
@@ -1275,6 +1410,7 @@ function renderClips(session) {
   }
 
   $('clipsContent').innerHTML = html;
+  updateStepBar(session);
 
   // Re-render AI card + trim editor + copy panel + transcript if a clip is selected
   if (selectedClipId) {
