@@ -209,6 +209,28 @@ def sanitize_note(note: str) -> str:
     safe = re.sub(r'\s+', '_', safe)
     return safe or "clip"
 
+def get_session_output_dir(session_id: str) -> Path:
+    """Return the per-session output folder inside ClipCutter_Clips, creating it if needed.
+    Format: ~/ClipCutter_Clips/YYYY-MM-DD_Video_Title/"""
+    conn = get_db()
+    try:
+        row = conn.execute(
+            "SELECT video_title, created_at FROM sessions WHERE id = ?", (session_id,)
+        ).fetchone()
+    finally:
+        conn.close()
+
+    if row and row["video_title"]:
+        date_str = (row["created_at"] or "")[:10]  # YYYY-MM-DD
+        title_slug = sanitize_note(row["video_title"])[:50]
+        folder_name = f"{date_str}_{title_slug}" if date_str else title_slug
+    else:
+        folder_name = session_id
+
+    out = OUTPUT_DIR / folder_name
+    out.mkdir(parents=True, exist_ok=True)
+    return out
+
 def extract_trimmed_transcript(transcript_data: dict, trim_start: float, trim_end: float) -> str:
     """Return transcript text for segments that overlap the trim range."""
     return " ".join(
@@ -816,10 +838,10 @@ def export_clip(clip_id: str, captions: bool = True, vertical: bool = True):
 
         trim_start, trim_end = resolve_trim_range(clip)
 
-        session_dir = SESSIONS_DIR / clip["session_id"]
+        out_dir = get_session_output_dir(clip["session_id"])
         safe_note = sanitize_note(clip["note"] or "clip")
         output_name = f"{safe_note}_{clip_id[:6]}.mp4"
-        output_path = OUTPUT_DIR / output_name
+        output_path = out_dir / output_name
 
         # Build ffmpeg filter chain
         vfilters = []
@@ -1437,8 +1459,9 @@ def api_save_trim(clip_id):
         # Cut a trimmed copy to the clips folder (fast stream-copy, no re-encode)
         row = conn.execute("SELECT raw_file, note, session_id FROM clips WHERE id = ?", (clip_id,)).fetchone()
         if row and row["raw_file"] and Path(row["raw_file"]).exists():
+            out_dir = get_session_output_dir(row["session_id"])
             safe_note = sanitize_note(row["note"] or "clip")
-            trimmed_path = OUTPUT_DIR / f"{safe_note}_{clip_id[:6]}_trimmed.mp4"
+            trimmed_path = out_dir / f"{safe_note}_{clip_id[:6]}_trimmed.mp4"
             cmd = [
                 "ffmpeg", "-y",
                 "-i", row["raw_file"],

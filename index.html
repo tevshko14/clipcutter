@@ -1050,6 +1050,7 @@
     <div class="btn-row">
       <button class="btn-primary" id="startBtn" onclick="startSession()">&#9654; Scan Livestream</button>
     </div>
+    <div id="recentSection" style="margin-top:28px;display:none;"></div>
   </div>
 
   <!-- ══ CLIPS VIEW ══ -->
@@ -1206,15 +1207,44 @@ function switchView(name) {
       }).join(' and ');
       b.innerHTML = '&#9888;&#65039; <div>Missing: <strong>' + d.missing.join(', ') + '</strong>. Install with ' + cmds + ' then relaunch.</div>';
     }
-    // Show welcome hint if no sessions yet
+    // Show welcome hint or recent sessions on New Session screen
     const sessRes = await fetch('/api/sessions');
     const sessData = await sessRes.json();
     if (!sessData.sessions || sessData.sessions.length === 0) {
       const hint = $('welcomeHint');
       if (hint) hint.style.display = 'flex';
+    } else {
+      loadRecentSessions(sessData.sessions);
     }
   } catch(e) {}
 })();
+
+function loadRecentSessions(sessions) {
+  const el = $('recentSection');
+  if (!el) return;
+  const recent = sessions.slice(0, 3); // Show last 3
+  if (recent.length === 0) { el.style.display = 'none'; return; }
+
+  let html = '<div class="section-label">Recent</div><div class="session-list">';
+  recent.forEach(s => {
+    const title = s.video_title || shortUrl(s.youtube_url);
+    const statusMap = { done: 'done', error: 'error', processing: 'processing', scanning: 'analyzing', 'ready to gather': 'ready' };
+    const badgeClass = statusMap[s.overall_status] || 'queued';
+    const badgeText = s.overall_status === 'ready to gather' ? 'ready' : s.overall_status;
+    html += `<div class="session-card" onclick="openSession('${s.id}')">
+      <div class="session-left">
+        <div class="session-url">${esc(title)}</div>
+        <div class="session-meta">${s.clip_count} clip${s.clip_count !== 1 ? 's' : ''} &middot; ${timeAgo(s.created_at)}</div>
+      </div>
+      <div class="session-right">
+        <div class="clip-badge ${badgeClass}">${esc(badgeText)}</div>
+      </div>
+    </div>`;
+  });
+  html += '</div>';
+  el.innerHTML = html;
+  el.style.display = 'block';
+}
 
 // ── Preview ──
 async function previewTimestamps() {
@@ -2274,13 +2304,17 @@ async function loadHistory() {
 
     let html = '<div class="section-label">Past Sessions</div><div class="session-list">';
     d.sessions.forEach(s => {
-      html += `<div class="session-card">
-        <div class="session-left" onclick="openSession('${s.id}')">
-          <div class="session-url">${esc(shortUrl(s.youtube_url))}</div>
-          <div class="session-meta">${s.clip_count} clip${s.clip_count !== 1 ? 's' : ''} &middot; ${timeAgo(s.created_at)}</div>
+      const title = s.video_title || shortUrl(s.youtube_url);
+      const statusMap = { done: 'done', error: 'error', processing: 'processing', scanning: 'analyzing', 'ready to gather': 'ready' };
+      const badgeClass = statusMap[s.overall_status] || 'queued';
+      const badgeText = s.overall_status === 'ready to gather' ? 'ready' : s.overall_status;
+      html += `<div class="session-card" onclick="openSession('${s.id}')">
+        <div class="session-left">
+          <div class="session-url">${esc(title)}</div>
+          <div class="session-meta">${s.clip_count} clip${s.clip_count !== 1 ? 's' : ''} &middot; ${timeAgo(s.created_at)} &middot; ${esc(shortUrl(s.youtube_url))}</div>
         </div>
         <div class="session-right">
-          <div class="clip-badge ${s.overall_status}">${esc(s.overall_status)}</div>
+          <div class="clip-badge ${badgeClass}">${esc(badgeText)}</div>
           <button class="delete-btn" onclick="event.stopPropagation(); deleteSession('${s.id}')" title="Delete session">&#10005;</button>
         </div>
       </div>`;
