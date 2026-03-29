@@ -7,8 +7,8 @@ echo "  ────────────────────────
 echo ""
 
 INSTALL_DIR="$HOME/.clipcutter"
+REPO_DIR="$INSTALL_DIR/repo"
 APP_PATH="$HOME/Desktop/ClipCutter.app"
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 VENV_DIR="$INSTALL_DIR/venv"
 
 echo "  [1/5] Checking Homebrew..."
@@ -39,35 +39,65 @@ else
 fi
 echo "       ✓ Using $($PYTHON --version)"
 
-echo "  [3/5] Checking ffmpeg..."
-if command -v ffmpeg &>/dev/null; then
-    echo "       ✓ Already installed"
+echo "  [3/5] Checking ffmpeg & git..."
+command -v ffmpeg &>/dev/null || { echo "       Installing ffmpeg..."; brew install ffmpeg; }
+command -v git &>/dev/null || { echo "       Installing git..."; brew install git; }
+echo "       ✓ ffmpeg and git ready"
+
+echo "  [4/5] Setting up ClipCutter..."
+mkdir -p "$INSTALL_DIR"
+
+# Clone or update the repo
+if [ -d "$REPO_DIR/.git" ]; then
+    cd "$REPO_DIR" && git pull --ff-only origin main 2>/dev/null || true
+    echo "       ✓ Updated from GitHub"
 else
-    echo "       Installing ffmpeg..."
-    brew install ffmpeg
-    echo "       ✓ ffmpeg installed"
+    git clone https://github.com/tevshko14/clipcutter.git "$REPO_DIR"
+    echo "       ✓ Cloned from GitHub"
 fi
 
-echo "  [4/5] Setting up ClipCutter environment..."
-mkdir -p "$INSTALL_DIR"
-cp "$SCRIPT_DIR/clipcutter.py" "$INSTALL_DIR/clipcutter.py"
-cp "$SCRIPT_DIR/index.html" "$INSTALL_DIR/index.html"
-rm -rf "$VENV_DIR"
-$PYTHON -m venv "$VENV_DIR"
+# Copy app files
+cp -f "$REPO_DIR/clipcutter.py" "$INSTALL_DIR/clipcutter.py"
+cp -f "$REPO_DIR/index.html"    "$INSTALL_DIR/index.html"
+
+# Set up venv
+if [ ! -f "$VENV_DIR/bin/python" ]; then
+    rm -rf "$VENV_DIR"
+    $PYTHON -m venv "$VENV_DIR"
+fi
 "$VENV_DIR/bin/pip" install --upgrade pip -q
 "$VENV_DIR/bin/pip" install flask pywebview yt-dlp openai-whisper anthropic -q
 echo "       ✓ All packages installed"
 
 echo "  [5/5] Building ClipCutter.app..."
-rm -rf "$APP_PATH"
+rm -rf "$APP_PATH" 2>/dev/null || true
 mkdir -p "$APP_PATH/Contents/MacOS"
 mkdir -p "$APP_PATH/Contents/Resources"
 
-cat > "$APP_PATH/Contents/MacOS/launcher" << LAUNCHER
+cat > "$APP_PATH/Contents/MacOS/launcher" << 'LAUNCHER'
 #!/bin/bash
-export PATH="/opt/homebrew/bin:/usr/local/bin:\$PATH"
+export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
+
+INSTALL_DIR="$HOME/.clipcutter"
+REPO_DIR="$INSTALL_DIR/repo"
+VENV="$INSTALL_DIR/venv"
+PYTHON="$VENV/bin/python"
+
+exec > "$INSTALL_DIR/launch.log" 2>&1
+
+# Auto-update from GitHub (silent, non-blocking)
+if [ -d "$REPO_DIR/.git" ]; then
+    cd "$REPO_DIR"
+    git pull --ff-only origin main 2>/dev/null || true
+    cp -f "$REPO_DIR/clipcutter.py" "$INSTALL_DIR/clipcutter.py"
+    cp -f "$REPO_DIR/index.html"    "$INSTALL_DIR/index.html"
+fi
+
+# Ensure deps
+"$VENV/bin/pip" install -q flask pywebview yt-dlp openai-whisper anthropic 2>/dev/null
+
 cd "$INSTALL_DIR"
-"$VENV_DIR/bin/python" clipcutter.py
+exec "$PYTHON" clipcutter.py
 LAUNCHER
 chmod +x "$APP_PATH/Contents/MacOS/launcher"
 
@@ -83,7 +113,7 @@ cat > "$APP_PATH/Contents/Info.plist" << PLIST
     <key>CFBundleIdentifier</key>
     <string>com.clipcutter.app</string>
     <key>CFBundleVersion</key>
-    <string>1.0</string>
+    <string>2.0</string>
     <key>CFBundleExecutable</key>
     <string>launcher</string>
     <key>NSHighResolutionCapable</key>
@@ -97,6 +127,7 @@ echo "  ════════════════════════
 echo "  ✅  Done! ClipCutter.app is on your Desktop."
 echo ""
 echo "  Just double-click it to launch."
+echo "  It auto-updates from GitHub on every launch."
 echo ""
 echo "  First time: right-click → Open → Open"
 echo "  ═══════════════════════════════════════"
