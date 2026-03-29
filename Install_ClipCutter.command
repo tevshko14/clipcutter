@@ -74,6 +74,12 @@ rm -rf "$APP_PATH" 2>/dev/null || true
 mkdir -p "$APP_PATH/Contents/MacOS"
 mkdir -p "$APP_PATH/Contents/Resources"
 
+# Copy app icon
+if [ -f "$REPO_DIR/icon.icns" ]; then
+    cp -f "$REPO_DIR/icon.icns" "$APP_PATH/Contents/Resources/icon.icns"
+    echo "       ✓ App icon installed"
+fi
+
 cat > "$APP_PATH/Contents/MacOS/launcher" << 'LAUNCHER'
 #!/bin/bash
 export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
@@ -91,6 +97,11 @@ if [ -d "$REPO_DIR/.git" ]; then
     git pull --ff-only origin main 2>/dev/null || true
     cp -f "$REPO_DIR/clipcutter.py" "$INSTALL_DIR/clipcutter.py"
     cp -f "$REPO_DIR/index.html"    "$INSTALL_DIR/index.html"
+    # Update icon if it changed
+    if [ -f "$REPO_DIR/icon.icns" ]; then
+        APP_RES="$(find "$HOME/Desktop" -name "ClipCutter*.app" -maxdepth 1 2>/dev/null | head -1)/Contents/Resources"
+        [ -d "$APP_RES" ] && cp -f "$REPO_DIR/icon.icns" "$APP_RES/icon.icns" 2>/dev/null
+    fi
 fi
 
 # Ensure deps
@@ -116,6 +127,8 @@ cat > "$APP_PATH/Contents/Info.plist" << PLIST
     <string>2.0</string>
     <key>CFBundleExecutable</key>
     <string>launcher</string>
+    <key>CFBundleIconFile</key>
+    <string>icon</string>
     <key>NSHighResolutionCapable</key>
     <true/>
 </dict>
