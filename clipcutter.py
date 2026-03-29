@@ -726,21 +726,26 @@ def generate_clip_copy(clip_id: str) -> tuple | None:
         channel_profile = config.get("channel_profile", "").strip()
         profile_section = f"Channel profile: {channel_profile}\n\n" if channel_profile else ""
 
-        prompt = f"""{profile_section}You are a social media copywriter. Write a title and description for this YouTube Short.
+        prompt = f"""{profile_section}You are a social media copywriter. Write a title, description, and tags for this YouTube Short.
 
 TRANSCRIPT:
 {trimmed_text}
 
 Rules:
-- Title: hook-first, ≤60 characters, no clickbait, no emojis unless genuinely useful
-- Description: 2-3 sentences, conversational, works for both YouTube and X
+- Title: hook-first, ≤60 characters, no clickbait. Start with a relevant emoji.
+- Description: 2-3 sentences written in FIRST PERSON (I/we/my — the creator is posting this, not a third party). Conversational, works for both YouTube and X/Twitter.
+- Tags: 5-8 hashtags relevant to the topics discussed. Include ticker symbols as hashtags (e.g. #SOFI #BMNR #NBIS). Mix topic tags (#investing #earnings #stockmarket) with ticker tags.
 
 Respond in JSON only, no other text:
-{{"title": "...", "description": "..."}}"""
+{{"title": "...", "description": "...", "tags": "..."}}"""
 
-        result = call_claude(api_key, prompt, max_tokens=300)
+        result = call_claude(api_key, prompt, max_tokens=400)
         title = result.get("title", "")
         description = result.get("description", "")
+        tags = result.get("tags", "")
+        # Combine description + tags into one copyable block
+        if tags:
+            description = f"{description}\n\n{tags}"
         conn.execute(
             "UPDATE clips SET generated_title = ?, generated_description = ? WHERE id = ?",
             (title, description, clip_id)
