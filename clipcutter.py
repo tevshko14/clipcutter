@@ -4,6 +4,7 @@ ClipCutter v2 — AI-powered livestream clip editor.
 Paste timestamps, get transcribed clips with AI sizzle reel suggestions.
 """
 
+import os
 import re
 import sys
 import json
@@ -13,6 +14,12 @@ import subprocess
 import threading
 import uuid
 from pathlib import Path
+
+# ---------- PATH Setup ----------
+# Ensure Homebrew binaries (ffmpeg, etc.) are findable even when launched from .app
+for _p in ["/opt/homebrew/bin", "/usr/local/bin"]:
+    if _p not in os.environ.get("PATH", ""):
+        os.environ["PATH"] = _p + ":" + os.environ.get("PATH", "")
 
 # ---------- Dependency Bootstrap ----------
 
@@ -50,9 +57,11 @@ def check_system_deps():
 
 def get_ytdlp_cmd():
     """Return the correct command to invoke yt-dlp."""
-    if shutil.which("yt-dlp"):
-        return ["yt-dlp"]
-    return [sys.executable, "-m", "yt_dlp"]
+    base = ["yt-dlp"] if shutil.which("yt-dlp") else [sys.executable, "-m", "yt_dlp"]
+    # yt-dlp 2026+ requires a JS runtime + challenge solver for YouTube
+    if shutil.which("node"):
+        base += ["--js-runtimes", "node", "--remote-components", "ejs:github"]
+    return base
 
 # Run bootstrap before importing flask/webview
 check_and_install_pip_deps()
@@ -512,6 +521,26 @@ def get_whisper_model():
                 print(f"  Whisper model ready.")
     return _whisper_model
 
+def _run_whisper(audio_path: str, model_name: str = None) -> dict:
+    """Run Whisper transcription, with fallback to 'base' model on tensor errors."""
+    import whisper
+    models_dir = str(APP_DIR / "whisper_models")
+
+    if model_name is None:
+        model_name = load_config().get("whisper_model", "base")
+
+    model = get_whisper_model()
+    try:
+        return model.transcribe(audio_path, word_timestamps=True, language="en")
+    except RuntimeError as e:
+        if "size of tensor" in str(e) and model_name != "base":
+            # Known Whisper tensor mismatch — retry with base model
+            print(f"  Whisper {model_name} failed with tensor error, retrying with base...")
+            fallback = whisper.load_model("base", download_root=models_dir)
+            return fallback.transcribe(audio_path, word_timestamps=True, language="en")
+        raise
+
+
 def transcribe_clip(clip_id: str):
     """Transcribe a downloaded clip using Whisper. Updates DB with results."""
     should_analyze = False
@@ -530,25 +559,28 @@ def transcribe_clip(clip_id: str):
         conn.execute("UPDATE clips SET status = 'transcribing' WHERE id = ?", (clip_id,))
         conn.commit()
 
-        model = get_whisper_model()
-        result = model.transcribe(clip["raw_file"], word_timestamps=True, language="en")
+        result = _run_whisper(clip["raw_file"])
 
         transcript_data = {
             "text": result.get("text", ""),
             "segments": [],
         }
         for seg in result.get("segments", []):
+            if seg is None:
+                continue
             segment = {
-                "start": seg["start"],
-                "end": seg["end"],
-                "text": seg["text"],
+                "start": seg.get("start", 0),
+                "end": seg.get("end", 0),
+                "text": seg.get("text", ""),
                 "words": [],
             }
-            for w in seg.get("words", []):
+            for w in seg.get("words", []) or []:
+                if w is None:
+                    continue
                 segment["words"].append({
-                    "word": w["word"],
-                    "start": w["start"],
-                    "end": w["end"],
+                    "word": w.get("word", ""),
+                    "start": w.get("start", 0),
+                    "end": w.get("end", 0),
                 })
             transcript_data["segments"].append(segment)
 
