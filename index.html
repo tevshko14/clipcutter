@@ -1665,9 +1665,9 @@ function renderTrimEditor(clip) {
   // Don't re-render if already showing this clip (preserves video state + user edits)
   if (trimState && trimState.clipId === clip.id) return;
 
-  // Initial trim values: final > AI suggestion > full clip
-  const trimStart = clip.final_start ?? clip.ai_suggestion_start ?? 0;
-  const trimEnd = clip.final_end ?? clip.ai_suggestion_end ?? (clip.window_seconds || 300);
+  // Initial trim values: saved trim > full clip (AI suggestion shown as overlay, not pre-applied)
+  const trimStart = clip.final_start ?? 0;
+  const trimEnd = clip.final_end ?? (clip.window_seconds || 300);
 
   container.innerHTML = `<div class="trim-editor">
     <div class="trim-video-wrap">
@@ -1959,9 +1959,10 @@ function updateWaveformPlayhead() {
   ctx.restore();
 }
 
-// Waveform click-to-seek + drag
+// Waveform click-to-seek + drag (throttled for smooth feel)
 (function() {
   let dragging = null; // 'start', 'end', or 'seek'
+  let dragRaf = null;  // requestAnimationFrame ID for throttling
 
   document.addEventListener('mousedown', (e) => {
     const wrap = $('trimWaveWrap');
@@ -1973,37 +1974,51 @@ function updateWaveformPlayhead() {
     const sx = (trimState.start / dur) * w;
     const ex = (trimState.end / dur) * w;
 
-    // Check if near a handle (within 8px)
-    if (Math.abs(x - sx) < 8) { dragging = 'start'; trimState.lastHandle = 'start'; }
-    else if (Math.abs(x - ex) < 8) { dragging = 'end'; trimState.lastHandle = 'end'; }
+    // Check if near a handle (within 12px for easier grabbing)
+    if (Math.abs(x - sx) < 12) { dragging = 'start'; trimState.lastHandle = 'start'; }
+    else if (Math.abs(x - ex) < 12) { dragging = 'end'; trimState.lastHandle = 'end'; }
     else { dragging = 'seek'; }
-    handleDrag(e, rect, dur, w);
+    applyDrag(e);
   });
 
   document.addEventListener('mousemove', (e) => {
     if (!dragging || !trimState) return;
-    const canvas = $('trimWaveCanvas');
-    if (!canvas) return;
-    const rect = canvas.getBoundingClientRect();
-    handleDrag(e, rect, trimState.duration || 1, rect.width);
+    // Throttle to animation frame — one update per ~16ms instead of every pixel
+    if (dragRaf) return;
+    dragRaf = requestAnimationFrame(() => {
+      dragRaf = null;
+      applyDrag(e);
+    });
   });
 
-  document.addEventListener('mouseup', () => { dragging = null; });
+  document.addEventListener('mouseup', () => {
+    if (dragging && trimState) {
+      // Final precise update + seek video on release
+      const video = $('trimVideo');
+      if (video && dragging !== 'seek') {
+        video.currentTime = dragging === 'start' ? trimState.start : trimState.end;
+      }
+    }
+    dragging = null;
+  });
 
-  function handleDrag(e, rect, dur, w) {
+  function applyDrag(e) {
+    const canvas = $('trimWaveCanvas');
+    if (!canvas || !trimState) return;
+    const rect = canvas.getBoundingClientRect();
+    const w = rect.width;
+    const dur = trimState.duration || 1;
     const x = Math.max(0, Math.min(e.clientX - rect.left, w));
     const t = (x / w) * dur;
-    const video = $('trimVideo');
 
     if (dragging === 'start') {
       trimState.start = trimClampStart(t);
-      if (video) video.currentTime = trimState.start;
       trimUpdateUI();
     } else if (dragging === 'end') {
       trimState.end = trimClampEnd(t);
-      if (video) video.currentTime = trimState.end;
       trimUpdateUI();
     } else if (dragging === 'seek') {
+      const video = $('trimVideo');
       if (video) video.currentTime = t;
     }
   }

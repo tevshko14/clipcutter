@@ -247,11 +247,14 @@ def resolve_trim_range(clip: dict) -> tuple:
     end = fe if fe is not None else (ai_e if ai_e is not None else (clip.get("window_seconds") or 300))
     return start, end
 
-def call_claude(api_key: str, prompt: str, max_tokens: int = 300) -> dict:
-    """Call Claude Haiku, strip optional code fences, and return parsed JSON."""
+CLAUDE_HAIKU = "claude-haiku-4-5-20251001"
+CLAUDE_SONNET = "claude-sonnet-4-20250514"
+
+def call_claude(api_key: str, prompt: str, max_tokens: int = 300, model: str = CLAUDE_HAIKU) -> dict:
+    """Call Claude, strip optional code fences, and return parsed JSON."""
     import anthropic
     text = anthropic.Anthropic(api_key=api_key).messages.create(
-        model="claude-haiku-4-5-20251001",
+        model=model,
         max_tokens=max_tokens,
         messages=[{"role": "user", "content": prompt}],
     ).content[0].text.strip()
@@ -301,21 +304,29 @@ def scan_session(session_id: str):
         captions_base = session_dir / "captions"
 
         ytdlp_cmd = get_ytdlp_cmd()
+
+        # Step 1: fetch video title (separate call — --print causes early exit)
+        title_result = subprocess.run(
+            [*ytdlp_cmd, "--print", "title", "--no-playlist", url],
+            capture_output=True, text=True, timeout=30
+        )
+        video_title = title_result.stdout.strip().splitlines()[0] if title_result.stdout.strip() else ""
+
+        conn.execute("UPDATE sessions SET video_title = ? WHERE id = ?", (video_title, session_id))
+        conn.commit()
+
+        # Step 2: download auto-captions (no --print, so yt-dlp actually writes the file)
         cmd = [
             *ytdlp_cmd,
             "--write-auto-subs",
             "--sub-lang", "en",
             "--skip-download",
             "--sub-format", "json3",
-            "--print", "title",
             "-o", str(captions_base),
             "--no-playlist",
             url,
         ]
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
-
-        # First stdout line is the video title (from --print title)
-        video_title = result.stdout.strip().splitlines()[0] if result.stdout.strip() else ""
 
         # Find captions file (yt-dlp appends language code)
         captions_file = None
@@ -374,7 +385,7 @@ Respond in JSON only, no other text:
 
 Order by quality (strongest first). Aim for 5-8 suggestions."""
 
-        suggestions_data = call_claude(api_key, prompt, max_tokens=2000)
+        suggestions_data = call_claude(api_key, prompt, max_tokens=2000, model=CLAUDE_SONNET)
 
         for i, s in enumerate(suggestions_data.get("suggestions", [])):
             conn.execute(
@@ -543,8 +554,10 @@ def get_whisper_model():
                 print(f"  Whisper model ready.")
     return _whisper_model
 
+_whisper_inference_lock = threading.Lock()
+
 def _run_whisper(audio_path: str, model_name: str = None) -> dict:
-    """Run Whisper transcription, with fallback to 'base' model on tensor errors."""
+    """Run Whisper transcription. Serialized — PyTorch models are not thread-safe."""
     import whisper
     models_dir = str(APP_DIR / "whisper_models")
 
@@ -552,15 +565,15 @@ def _run_whisper(audio_path: str, model_name: str = None) -> dict:
         model_name = load_config().get("whisper_model", "base")
 
     model = get_whisper_model()
-    try:
-        return model.transcribe(audio_path, word_timestamps=True, language="en")
-    except RuntimeError as e:
-        if "size of tensor" in str(e) and model_name != "base":
-            # Known Whisper tensor mismatch — retry with base model
-            print(f"  Whisper {model_name} failed with tensor error, retrying with base...")
-            fallback = whisper.load_model("base", download_root=models_dir)
-            return fallback.transcribe(audio_path, word_timestamps=True, language="en")
-        raise
+    with _whisper_inference_lock:
+        try:
+            return model.transcribe(audio_path, word_timestamps=True, language="en")
+        except RuntimeError as e:
+            if "size of tensor" in str(e) and model_name != "base":
+                print(f"  Whisper {model_name} failed with tensor error, retrying with base...")
+                fallback = whisper.load_model("base", download_root=models_dir)
+                return fallback.transcribe(audio_path, word_timestamps=True, language="en")
+            raise
 
 
 def transcribe_clip(clip_id: str):
@@ -739,7 +752,7 @@ Rules:
 Respond in JSON only, no other text:
 {{"title": "...", "description": "...", "tags": "..."}}"""
 
-        result = call_claude(api_key, prompt, max_tokens=400)
+        result = call_claude(api_key, prompt, max_tokens=400, model=CLAUDE_SONNET)
         title = result.get("title", "")
         description = result.get("description", "")
         tags = result.get("tags", "")
