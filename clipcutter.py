@@ -1276,9 +1276,31 @@ def api_list_sessions():
             GROUP BY s.id
             ORDER BY s.created_at DESC
         """).fetchall()
+        # Fetch all clips for all sessions in one query (avoid N+1)
+        all_clips = rows_to_list(conn.execute(
+            """SELECT id, session_id, note, status, final_start, final_end,
+                      window_seconds, export_file, generated_title
+               FROM clips ORDER BY center_seconds"""
+        ).fetchall())
+
+        # Group clips by session_id
+        clips_by_session = {}
+        for c in all_clips:
+            sid = c["session_id"]
+            if sid not in clips_by_session:
+                clips_by_session[sid] = []
+            # Compute trimmed duration
+            if c["final_start"] is not None and c["final_end"] is not None:
+                c["trimmed_duration"] = round(c["final_end"] - c["final_start"])
+            else:
+                c["trimmed_duration"] = None
+            clips_by_session[sid].append(c)
+
         sessions = []
         for r in rows:
             s = dict(r)
+            # Remove large stream_captions from listing response
+            s.pop("stream_captions", None)
             phase = s.get("gather_phase", "")
             if phase == "scanning":
                 s["overall_status"] = "scanning"
@@ -1292,6 +1314,7 @@ def api_list_sessions():
                 s["overall_status"] = "processing"
             else:
                 s["overall_status"] = "queued"
+            s["clips"] = clips_by_session.get(s["id"], [])
             sessions.append(s)
     finally:
         conn.close()
@@ -1651,6 +1674,38 @@ def api_save_copy(clip_id):
             "UPDATE clips SET generated_title = ?, generated_description = ? WHERE id = ?",
             (data.get("title", ""), data.get("description", ""), clip_id)
         )
+        conn.commit()
+    finally:
+        conn.close()
+    return jsonify({"ok": True})
+
+@app.route("/api/clips/<clip_id>", methods=["DELETE"])
+def api_delete_clip(clip_id):
+    """Delete a single clip and its files. Only allowed for exported or ready clips."""
+    conn = get_db()
+    try:
+        clip = row_to_dict(conn.execute(
+            "SELECT id, session_id, status, raw_file, export_file FROM clips WHERE id = ?",
+            (clip_id,)
+        ).fetchone())
+        if not clip:
+            return jsonify({"error": "Clip not found"}), 404
+        if clip["status"] not in ("exported", "ready"):
+            return jsonify({"error": "Can only delete exported or ready clips"}), 400
+
+        # Delete files
+        for path_key in ("raw_file", "export_file"):
+            p = clip.get(path_key)
+            if p and Path(p).exists():
+                Path(p).unlink(missing_ok=True)
+
+        # Delete waveform cache
+        waveform_cache = SESSIONS_DIR / clip["session_id"] / "waveforms" / f"{clip_id}.json"
+        if waveform_cache.exists():
+            waveform_cache.unlink(missing_ok=True)
+
+        # Delete DB record
+        conn.execute("DELETE FROM clips WHERE id = ?", (clip_id,))
         conn.commit()
     finally:
         conn.close()

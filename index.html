@@ -808,6 +808,90 @@
   }
   .delete-btn:hover { background: var(--red-dim); color: var(--red); border-color: var(--red-border); }
 
+  /* ── History Groups ── */
+  .history-group {
+    margin-bottom: 12px;
+  }
+  .history-group-header {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 12px 16px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    cursor: pointer;
+    transition: border-color 0.15s;
+  }
+  .history-group-header:hover { border-color: var(--border-hover); }
+  .history-chevron {
+    font-size: 10px;
+    color: var(--text-dimmer);
+    transition: transform 0.2s;
+    flex-shrink: 0;
+  }
+  .history-chevron.open { transform: rotate(90deg); }
+  .history-group-info { flex: 1; min-width: 0; }
+  .history-group-title {
+    font-weight: 500;
+    font-size: 13px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    margin-bottom: 2px;
+  }
+  .history-group-meta {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--text-dim);
+  }
+  .history-group-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-shrink: 0;
+  }
+  .history-clips {
+    border: 1px solid var(--border);
+    border-top: none;
+    border-radius: 0 0 var(--radius) var(--radius);
+    overflow: hidden;
+  }
+  .history-clips.collapsed { display: none; }
+  .history-clip-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 16px 10px 38px;
+    border-bottom: 1px solid var(--border);
+    transition: background 0.1s;
+    cursor: pointer;
+  }
+  .history-clip-row:last-child { border-bottom: none; }
+  .history-clip-row:hover { background: var(--surface-2); }
+  .history-clip-name {
+    flex: 1;
+    font-size: 13px;
+    min-width: 0;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .history-clip-duration {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--text-dim);
+    min-width: 40px;
+    text-align: right;
+    flex-shrink: 0;
+  }
+  .history-clip-actions {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-shrink: 0;
+  }
+
   /* ── Settings Modal ── */
   .modal-overlay {
     position: fixed;
@@ -2307,6 +2391,8 @@ async function gatherSession(sessionId) {
 }
 
 // ── History ──
+let historyExpandedGroups = new Set(); // track which sessions are expanded
+
 async function loadHistory() {
   try {
     const r = await fetch('/api/sessions');
@@ -2317,28 +2403,77 @@ async function loadHistory() {
       return;
     }
 
-    let html = '<div class="section-label">Past Sessions</div><div class="session-list">';
+    // Default: expand all groups on first load
+    if (historyExpandedGroups.size === 0) {
+      d.sessions.forEach(s => historyExpandedGroups.add(s.id));
+    }
+
+    let html = '<div class="section-label">History</div>';
     d.sessions.forEach(s => {
       const title = s.video_title || shortUrl(s.youtube_url);
+      const clips = s.clips || [];
+      const isOpen = historyExpandedGroups.has(s.id);
       const statusMap = { done: 'done', error: 'error', processing: 'processing', scanning: 'analyzing', 'ready to gather': 'ready' };
       const badgeClass = statusMap[s.overall_status] || 'queued';
       const badgeText = s.overall_status === 'ready to gather' ? 'ready' : s.overall_status;
-      html += `<div class="session-card" onclick="openSession('${s.id}')">
-        <div class="session-left">
-          <div class="session-url">${esc(title)}</div>
-          <div class="session-meta">${s.clip_count} clip${s.clip_count !== 1 ? 's' : ''} &middot; ${timeAgo(s.created_at)} &middot; ${esc(shortUrl(s.youtube_url))}</div>
+      const dateStr = (s.created_at || '').slice(5, 10).replace('-', '/'); // MM/DD
+
+      // Session group header
+      html += `<div class="history-group">`;
+      html += `<div class="history-group-header" onclick="toggleHistoryGroup('${s.id}')">
+        <div class="history-chevron ${isOpen ? 'open' : ''}">&#9654;</div>
+        <div class="history-group-info">
+          <div class="history-group-title">${esc(title)}</div>
+          <div class="history-group-meta">${clips.length} clip${clips.length !== 1 ? 's' : ''} &middot; ${dateStr}</div>
         </div>
-        <div class="session-right">
+        <div class="history-group-actions">
           <div class="clip-badge ${badgeClass}">${esc(badgeText)}</div>
           <button class="delete-btn" onclick="event.stopPropagation(); deleteSession('${s.id}')" title="Delete session">&#10005;</button>
         </div>
       </div>`;
+
+      // Clip rows
+      if (clips.length > 0) {
+        html += `<div class="history-clips ${isOpen ? '' : 'collapsed'}" id="histClips_${s.id}">`;
+        clips.forEach(c => {
+          const clipName = c.generated_title || c.note || 'Untitled';
+          const dur = c.trimmed_duration != null ? fmtTime(c.trimmed_duration) : '—';
+          const canDelete = c.status === 'exported' || c.status === 'ready';
+          html += `<div class="history-clip-row" onclick="openClipInSession('${s.id}', '${c.id}')">
+            <div class="clip-status ${c.status}"></div>
+            <div class="history-clip-name">${esc(clipName)}</div>
+            <div class="history-clip-duration">${dur}</div>
+            <div class="history-clip-actions">
+              <div class="clip-badge ${c.status}">${esc(c.status)}</div>
+              ${canDelete ? `<button class="delete-btn" onclick="event.stopPropagation(); deleteClip('${c.id}')" title="Delete clip">&#128465;</button>` : ''}
+            </div>
+          </div>`;
+        });
+        html += `</div>`;
+      }
+      html += `</div>`;
     });
-    html += '</div>';
+
     $('historyContent').innerHTML = html;
   } catch(e) {
     toast('Failed to load history');
   }
+}
+
+function toggleHistoryGroup(sessionId) {
+  const el = $('histClips_' + sessionId);
+  if (!el) return;
+  const isCollapsed = el.classList.contains('collapsed');
+  el.classList.toggle('collapsed');
+  // Update chevron
+  const header = el.previousElementSibling;
+  if (header) {
+    const chev = header.querySelector('.history-chevron');
+    if (chev) chev.classList.toggle('open', isCollapsed);
+  }
+  // Track state
+  if (isCollapsed) historyExpandedGroups.add(sessionId);
+  else historyExpandedGroups.delete(sessionId);
 }
 
 function openSession(sessionId) {
@@ -2347,9 +2482,27 @@ function openSession(sessionId) {
   loadSession(sessionId);
 }
 
+function openClipInSession(sessionId, clipId) {
+  currentSessionId = sessionId;
+  selectedClipId = clipId;
+  switchView('clips');
+  loadSession(sessionId);
+}
+
+async function deleteClip(clipId) {
+  try {
+    const r = await fetch(`/api/clips/${clipId}`, { method: 'DELETE' });
+    const d = await r.json();
+    if (d.error) { toast(d.error); return; }
+    toast('Clip deleted');
+    loadHistory();
+  } catch(e) { toast('Failed to delete clip'); }
+}
+
 async function deleteSession(sessionId) {
   try {
     await fetch(`/api/sessions/${sessionId}`, { method: 'DELETE' });
+    historyExpandedGroups.delete(sessionId);
     loadHistory();
     if (currentSessionId === sessionId) {
       currentSessionId = null;
