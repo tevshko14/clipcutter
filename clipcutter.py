@@ -1244,10 +1244,48 @@ def api_update_config():
 def api_create_session():
     data = request.json
     url = data.get("url", "").strip()
+    text = data.get("text", "").strip()
     if not url:
         return jsonify({"error": "YouTube URL is required"}), 400
 
     session_id = uuid.uuid4().hex[:12]
+    config = load_config()
+    default_duration = config.get("default_clip_window", 5) * 60
+
+    # If timestamps are provided, skip Phase A scan — go straight to clips
+    if text:
+        parsed = parse_clip_entries(text, default_duration)
+        if not parsed:
+            return jsonify({"error": "No valid timestamps found"}), 400
+
+        conn = get_db()
+        try:
+            conn.execute(
+                "INSERT INTO sessions (id, youtube_url, gather_phase) VALUES (?, ?, 'collecting')",
+                (session_id, url)
+            )
+            clip_ids = []
+            for clip in parsed:
+                clip_id = uuid.uuid4().hex[:10]
+                conn.execute(
+                    """INSERT INTO clips (id, session_id, note, center_seconds, window_seconds,
+                       start_seconds, end_seconds, status)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, 'queued')""",
+                    (clip_id, session_id, clip["note"], clip["center"],
+                     clip["duration"], clip["start"], clip["end"])
+                )
+                clip_ids.append(clip_id)
+            conn.commit()
+        finally:
+            conn.close()
+
+        # Parallel downloads
+        for clip_id in clip_ids:
+            threading.Thread(target=download_clip, args=(clip_id, url), daemon=True).start()
+
+        return jsonify({"session_id": session_id, "clip_count": len(parsed), "mode": "direct"})
+
+    # No timestamps — do Phase A scan
     conn = get_db()
     try:
         conn.execute(
@@ -1259,7 +1297,7 @@ def api_create_session():
         conn.close()
 
     threading.Thread(target=scan_session, args=(session_id,), daemon=True).start()
-    return jsonify({"session_id": session_id})
+    return jsonify({"session_id": session_id, "mode": "scan"})
 
 @app.route("/api/sessions", methods=["GET"])
 def api_list_sessions():

@@ -1134,6 +1134,27 @@
     <div class="btn-row">
       <button class="btn-primary" id="startBtn" onclick="startSession()">&#9654; Scan Livestream</button>
     </div>
+
+    <!-- Paste timestamps (for ClipCutter Live → ClipCutter pipeline) -->
+    <div style="margin-top:20px;">
+      <button id="pasteToggle" onclick="togglePasteSection()" class="btn-ghost btn-sm" style="font-family:var(--mono);font-size:10px;text-transform:uppercase;letter-spacing:1px;color:var(--text-dimmer);padding:6px 12px;">
+        &#128203; Paste timestamps instead
+      </button>
+      <div id="pasteSection" style="display:none;margin-top:12px;">
+        <div class="field">
+          <label>Timestamps</label>
+          <textarea id="pasteTimestamps" placeholder="Paste from ClipCutter Live or type manually:
+1:48:00 - SoFi buyback thesis
+2:15:00 - Rate cut analysis
+45:00 - Viewer Q&A" style="min-height:100px;"></textarea>
+          <div class="hint">One per line: <code>timestamp - note</code>. Copied from ClipCutter Live's "Potential Shorts" section.</div>
+        </div>
+        <div class="btn-row">
+          <button class="btn-primary" id="pasteStartBtn" onclick="startSessionWithTimestamps()">&#9986; Start Clipping</button>
+        </div>
+      </div>
+    </div>
+
     <div id="recentSection" style="margin-top:28px;display:none;"></div>
   </div>
 
@@ -1330,12 +1351,46 @@ function loadRecentSessions(sessions) {
   el.style.display = 'block';
 }
 
-// ── Preview ──
-async function previewTimestamps() {
-  // Legacy function — kept for API compatibility but no longer called from UI
+function togglePasteSection() {
+  const section = $('pasteSection');
+  if (!section) return;
+  section.style.display = section.style.display === 'none' ? 'block' : 'none';
 }
 
-// ── Start Session ──
+async function startSessionWithTimestamps() {
+  const url = $('url').value.trim();
+  const text = $('pasteTimestamps').value.trim();
+  if (!url) { toast('Enter a YouTube URL'); return; }
+  if (!text) { toast('Paste some timestamps'); return; }
+
+  const btn = $('pasteStartBtn');
+  btn.disabled = true;
+  btn.textContent = 'Starting...';
+
+  try {
+    const r = await fetch('/api/sessions', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({url, text}),
+    });
+    const d = await r.json();
+    if (d.error) { toast(d.error); return; }
+
+    currentSessionId = d.session_id;
+    $('url').value = '';
+    $('pasteTimestamps').value = '';
+    $('pasteSection').style.display = 'none';
+    switchView('clips');
+    startPolling(d.session_id);
+    loadSession(d.session_id);
+  } catch(e) {
+    toast('Failed to create session');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '✂ Start Clipping';
+  }
+}
+
 async function startSession() {
   const url = $('url').value.trim();
   if (!url) { toast('Enter a YouTube URL'); return; }
