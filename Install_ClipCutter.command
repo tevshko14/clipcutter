@@ -66,7 +66,7 @@ if [ ! -f "$VENV_DIR/bin/python" ]; then
     $PYTHON -m venv "$VENV_DIR"
 fi
 "$VENV_DIR/bin/pip" install --upgrade pip -q
-"$VENV_DIR/bin/pip" install flask pywebview yt-dlp openai-whisper anthropic -q
+"$VENV_DIR/bin/pip" install flask pywebview yt-dlp openai-whisper anthropic faster-whisper -q
 echo "       ✓ All packages installed"
 
 echo "  [5/5] Building ClipCutter.app..."
@@ -105,7 +105,7 @@ if [ -d "$REPO_DIR/.git" ]; then
 fi
 
 # Ensure deps
-"$VENV/bin/pip" install -q flask pywebview yt-dlp openai-whisper anthropic 2>/dev/null
+"$VENV/bin/pip" install -q flask pywebview yt-dlp openai-whisper anthropic faster-whisper 2>/dev/null
 
 cd "$INSTALL_DIR"
 exec "$PYTHON" clipcutter.py

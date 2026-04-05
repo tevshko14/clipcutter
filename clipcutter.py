@@ -25,7 +25,7 @@ for _p in ["/opt/homebrew/bin", "/usr/local/bin"]:
 
 def check_and_install_pip_deps():
     """Auto-install Python dependencies on first run."""
-    required = {"flask": "flask", "webview": "pywebview", "whisper": "openai-whisper", "anthropic": "anthropic"}
+    required = {"flask": "flask", "webview": "pywebview", "whisper": "openai-whisper", "anthropic": "anthropic", "faster_whisper": "faster-whisper"}
     missing = []
     for import_name, pip_name in required.items():
         try:
@@ -188,6 +188,30 @@ def init_db():
         except sqlite3.OperationalError as e:
             if "duplicate column name" not in str(e):
                 raise
+    conn.commit()
+
+    # SnipCut jobs table
+    conn.executescript("""
+        CREATE TABLE IF NOT EXISTS snipcut_jobs (
+            id TEXT PRIMARY KEY,
+            input_path TEXT NOT NULL,
+            input_filename TEXT DEFAULT '',
+            status TEXT DEFAULT 'queued',
+            error_text TEXT DEFAULT '',
+            duration_seconds REAL DEFAULT 0,
+            is_vfr INTEGER DEFAULT 0,
+            width INTEGER DEFAULT 0,
+            height INTEGER DEFAULT 0,
+            cfr_output_path TEXT DEFAULT '',
+            cfr_progress REAL DEFAULT 0,
+            transcribe_progress REAL DEFAULT 0,
+            transcript_json TEXT DEFAULT '',
+            silence_gaps_json TEXT DEFAULT '',
+            cuts_json TEXT DEFAULT '',
+            analysis_reasoning TEXT DEFAULT '',
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP
+        );
+    """)
     conn.commit()
 
     conn.close()
@@ -1198,6 +1222,298 @@ def run_session_downloads(session_id: str):
     conn.close()
 
 
+# ---------- SnipCut: AI-Assisted Rough Cut Pipeline ----------
+
+def snipcut_probe(input_path: str) -> dict:
+    """Probe video file for duration, fps, VFR status, resolution."""
+    cmd = ["ffprobe", "-v", "quiet", "-print_format", "json",
+           "-show_format", "-show_streams", input_path]
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    if result.returncode != 0:
+        raise RuntimeError(f"ffprobe failed: {result.stderr[:200]}")
+
+    data = json.loads(result.stdout)
+    video_stream = next((s for s in data.get("streams", []) if s["codec_type"] == "video"), None)
+    if not video_stream:
+        raise RuntimeError("No video stream found.")
+
+    def parse_rate(rate_str):
+        try:
+            num, den = map(int, rate_str.split("/"))
+            return num / den if den else 0
+        except Exception:
+            return 0
+
+    r_fps = parse_rate(video_stream.get("r_frame_rate", "0/1"))
+    avg_fps = parse_rate(video_stream.get("avg_frame_rate", "0/1"))
+    is_vfr = abs(r_fps - avg_fps) > 1.0
+
+    return {
+        "duration": float(data.get("format", {}).get("duration", 0)),
+        "fps": r_fps,
+        "width": int(video_stream.get("width", 0)),
+        "height": int(video_stream.get("height", 0)),
+        "is_vfr": is_vfr,
+        "size_mb": os.path.getsize(input_path) / (1024 * 1024),
+    }
+
+
+def _snipcut_update(job_id: str, **fields):
+    """Update a snipcut job's fields in DB."""
+    if not fields:
+        return
+    conn = get_db()
+    try:
+        cols = ", ".join(f"{k} = ?" for k in fields.keys())
+        values = list(fields.values()) + [job_id]
+        conn.execute(f"UPDATE snipcut_jobs SET {cols} WHERE id = ?", values)
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def snipcut_convert_cfr(input_path: str, output_path: str, job_id: str, target_fps: int = 30) -> str:
+    """Convert to CFR or copy bit-for-bit if already CFR. Updates cfr_progress via job_id."""
+    info = snipcut_probe(input_path)
+    duration_us = info["duration"] * 1_000_000
+
+    if not info["is_vfr"]:
+        # Already CFR — copy (zero quality loss)
+        _snipcut_update(job_id, cfr_progress=10.0)
+        shutil.copy2(input_path, output_path)
+        _snipcut_update(job_id, cfr_progress=100.0, cfr_output_path=output_path)
+        return output_path
+
+    cmd = [
+        "ffmpeg", "-i", input_path,
+        "-vsync", "cfr", "-r", str(target_fps),
+        "-c:v", "libx264", "-preset", "medium", "-crf", "16",
+        "-c:a", "copy", "-movflags", "+faststart",
+        "-progress", "pipe:1", "-y", output_path,
+    ]
+    process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True)
+
+    for line in process.stdout:
+        line = line.strip()
+        if line.startswith("out_time_us="):
+            try:
+                current_us = int(line.split("=")[1])
+                if duration_us > 0:
+                    pct = min(98.0, (current_us / duration_us) * 100)
+                    _snipcut_update(job_id, cfr_progress=pct)
+            except (ValueError, ZeroDivisionError):
+                pass
+    process.wait()
+    if process.returncode != 0:
+        stderr = process.stderr.read() if process.stderr else "Unknown"
+        if os.path.exists(output_path):
+            os.remove(output_path)
+        raise RuntimeError(f"FFmpeg CFR conversion failed: {stderr[-300:]}")
+
+    _snipcut_update(job_id, cfr_progress=100.0, cfr_output_path=output_path)
+    return output_path
+
+
+def snipcut_extract_audio(input_path: str, audio_path: str):
+    """Extract 16kHz mono PCM WAV for Whisper from the raw input."""
+    cmd = ["ffmpeg", "-y", "-i", input_path,
+           "-vn", "-acodec", "pcm_s16le", "-ar", "16000", "-ac", "1",
+           audio_path]
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+    if result.returncode != 0:
+        raise RuntimeError(f"Audio extract failed: {result.stderr[-300:]}")
+
+
+_faster_whisper_model = None
+_faster_whisper_lock = threading.Lock()
+
+
+def _get_faster_whisper():
+    global _faster_whisper_model
+    if _faster_whisper_model is None:
+        with _faster_whisper_lock:
+            if _faster_whisper_model is None:
+                from faster_whisper import WhisperModel
+                models_dir = str(APP_DIR / "faster_whisper_models")
+                print("  Loading faster-whisper medium model...")
+                _faster_whisper_model = WhisperModel("medium", device="cpu", compute_type="int8",
+                                                     download_root=models_dir)
+                print("  faster-whisper ready.")
+    return _faster_whisper_model
+
+
+def snipcut_transcribe(audio_path: str, job_id: str, duration: float) -> list:
+    """Transcribe with faster-whisper, word-level. Returns list of {word, start, end}."""
+    model = _get_faster_whisper()
+    segments, _ = model.transcribe(audio_path, language="en", word_timestamps=True)
+
+    words = []
+    for seg in segments:
+        if seg.words:
+            for w in seg.words:
+                words.append({"word": w.word.strip(), "start": float(w.start), "end": float(w.end)})
+            # Progress: latest end / duration
+            if duration > 0 and seg.end:
+                pct = min(98.0, (seg.end / duration) * 100)
+                _snipcut_update(job_id, transcribe_progress=pct)
+    _snipcut_update(job_id, transcribe_progress=100.0)
+    return words
+
+
+def snipcut_detect_silence(words: list, threshold: float = 2.5) -> list:
+    """Find gaps between words longer than threshold seconds."""
+    gaps = []
+    for i in range(len(words) - 1):
+        gap_start = words[i]["end"]
+        gap_end = words[i + 1]["start"]
+        duration = gap_end - gap_start
+        if duration > threshold:
+            gaps.append({"start": round(gap_start, 2), "end": round(gap_end, 2), "duration": round(duration, 2)})
+    return gaps
+
+
+def snipcut_analyze(words: list, api_key: str) -> dict:
+    """Call Claude Sonnet to identify filler words and repeated takes."""
+    if not api_key or not words:
+        return {"cuts": [], "reasoning": "No API key or transcript" if not api_key else "Empty transcript"}
+
+    # Format as [time] word lines, chunking for long transcripts
+    def fmt(w):
+        m = int(w["start"] // 60)
+        s = w["start"] % 60
+        return f"[{m}:{s:05.2f}] {w['word']}"
+
+    transcript_text = "\n".join(fmt(w) for w in words)
+    # Truncate to ~40k chars (Sonnet handles ~200k tokens, but we want speed)
+    if len(transcript_text) > 40000:
+        transcript_text = transcript_text[:40000] + "\n[... truncated for length ...]"
+
+    prompt = f"""You are a video editor analyzing a transcript with word-level timestamps. The speaker is recording a talking-head video about finance/stocks.
+
+Your job: identify segments to CUT from the video.
+
+CUT these:
+1. **Filler words used as fillers**: um, uh, ah, like (when used as filler, NOT as comparison), you know, I mean, sort of, kind of, basically (as filler), actually (as filler), right (as filler tag), so (at the start of a sentence, used as a filler)
+2. **Repeated takes**: when the speaker starts a thought, pauses/stumbles/restarts, then says the thought again. ALWAYS keep the SECOND attempt and CUT the FIRST. The boundary is usually marked by a pause, filler word, or abrupt restart.
+
+Do NOT cut:
+- Intentional pauses for emphasis
+- "like" used as comparison ("it looks like...", "companies like Apple")
+- Rhetorical questions
+- Natural speech rhythm
+
+TRANSCRIPT (format: [MM:SS.SS] word):
+{transcript_text}
+
+Respond in JSON only. For each cut, give exact start/end times matching the transcript timestamps:
+{{
+  "cuts": [
+    {{"start": 12.45, "end": 12.90, "reason": "filler", "content": "um"}},
+    {{"start": 45.20, "end": 52.80, "reason": "repeated_take", "content": "First attempt of: So today we're going to talk about..."}}
+  ],
+  "reasoning": "Brief summary of what you found"
+}}
+
+If nothing needs cutting, return {{"cuts": [], "reasoning": "Clean delivery"}}."""
+
+    import anthropic
+    text = anthropic.Anthropic(api_key=api_key).messages.create(
+        model="claude-sonnet-4-20250514",
+        max_tokens=8000,
+        messages=[{"role": "user", "content": prompt}],
+    ).content[0].text.strip()
+
+    # Extract JSON
+    match = re.search(r'\{[\s\S]*\}', text)
+    if match:
+        text = match.group(0)
+    return json.loads(text)
+
+
+def snipcut_process(job_id: str):
+    """Main orchestrator: probe → parallel(CFR + transcribe) → analyze → done."""
+    import concurrent.futures
+
+    conn = get_db()
+    try:
+        job = row_to_dict(conn.execute(
+            "SELECT id, input_path FROM snipcut_jobs WHERE id = ?", (job_id,)
+        ).fetchone())
+    finally:
+        conn.close()
+
+    if not job:
+        return
+
+    input_path = job["input_path"]
+    cfr_output = str(Path(input_path).with_name(f"{Path(input_path).stem}_cfr{Path(input_path).suffix}"))
+    audio_path = str(APP_DIR / f"snipcut_audio_{job_id}.wav")
+
+    try:
+        # Step 1: probe
+        _snipcut_update(job_id, status="probing")
+        info = snipcut_probe(input_path)
+        _snipcut_update(job_id,
+                        duration_seconds=info["duration"],
+                        is_vfr=1 if info["is_vfr"] else 0,
+                        width=info["width"],
+                        height=info["height"])
+
+        # Check if CFR output already exists
+        if os.path.exists(cfr_output):
+            raise RuntimeError(f"Output already exists: {Path(cfr_output).name}. Delete it first.")
+
+        # Step 2: parallel CFR + audio extract + transcribe
+        _snipcut_update(job_id, status="processing")
+
+        def cfr_task():
+            return snipcut_convert_cfr(input_path, cfr_output, job_id)
+
+        def transcribe_task():
+            snipcut_extract_audio(input_path, audio_path)
+            words = snipcut_transcribe(audio_path, job_id, info["duration"])
+            return words
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+            cfr_future = pool.submit(cfr_task)
+            transcribe_future = pool.submit(transcribe_task)
+            cfr_future.result()
+            words = transcribe_future.result()
+
+        # Clean up extracted audio
+        if os.path.exists(audio_path):
+            try:
+                os.remove(audio_path)
+            except OSError:
+                pass
+
+        # Store transcript
+        _snipcut_update(job_id, transcript_json=json.dumps(words))
+
+        # Step 3: silence detection
+        silence_gaps = snipcut_detect_silence(words, threshold=2.5)
+        _snipcut_update(job_id, silence_gaps_json=json.dumps(silence_gaps))
+
+        # Step 4: Claude analysis
+        _snipcut_update(job_id, status="analyzing")
+        api_key = load_config().get("api_key", "")
+        result = snipcut_analyze(words, api_key)
+
+        _snipcut_update(job_id,
+                        cuts_json=json.dumps(result.get("cuts", [])),
+                        analysis_reasoning=result.get("reasoning", ""),
+                        status="done")
+
+    except Exception as e:
+        # Clean up partial output
+        if os.path.exists(audio_path):
+            try:
+                os.remove(audio_path)
+            except OSError:
+                pass
+        _snipcut_update(job_id, status="error", error_text=str(e)[:400])
+
+
 # ---------- Flask Routes ----------
 
 @app.route("/")
@@ -1785,6 +2101,84 @@ def api_open_folder():
         subprocess.Popen(["explorer", folder])
     else:
         subprocess.Popen(["xdg-open", folder])
+    return jsonify({"ok": True})
+
+
+# ---------- SnipCut Routes ----------
+
+@app.route("/api/snipcut/jobs", methods=["POST"])
+def api_snipcut_create():
+    data = request.json or {}
+    input_path = (data.get("input_path") or "").strip().strip("'\"")
+    if not input_path:
+        return jsonify({"error": "input_path required"}), 400
+    if not os.path.exists(input_path):
+        return jsonify({"error": f"File not found: {input_path}"}), 400
+    if not input_path.lower().endswith(".mp4"):
+        return jsonify({"error": "Only .mp4 files are supported"}), 400
+
+    # Check if already processed
+    cfr_output = str(Path(input_path).with_name(f"{Path(input_path).stem}_cfr{Path(input_path).suffix}"))
+    if os.path.exists(cfr_output):
+        return jsonify({"error": f"Output already exists: {Path(cfr_output).name}. Delete it first."}), 400
+
+    job_id = uuid.uuid4().hex[:12]
+    filename = Path(input_path).name
+
+    conn = get_db()
+    try:
+        conn.execute(
+            "INSERT INTO snipcut_jobs (id, input_path, input_filename, status) VALUES (?, ?, ?, 'queued')",
+            (job_id, input_path, filename)
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    threading.Thread(target=snipcut_process, args=(job_id,), daemon=True).start()
+    return jsonify({"ok": True, "job_id": job_id})
+
+
+@app.route("/api/snipcut/jobs/<job_id>")
+def api_snipcut_get(job_id):
+    conn = get_db()
+    try:
+        job = row_to_dict(conn.execute(
+            "SELECT * FROM snipcut_jobs WHERE id = ?", (job_id,)
+        ).fetchone())
+    finally:
+        conn.close()
+    if not job:
+        return jsonify({"error": "Job not found"}), 404
+
+    # Don't send large transcript in the main poll; client fetches separately if needed
+    job.pop("transcript_json", None)
+    return jsonify(job)
+
+
+@app.route("/api/snipcut/jobs")
+def api_snipcut_list():
+    conn = get_db()
+    try:
+        rows = rows_to_list(conn.execute(
+            "SELECT id, input_filename, status, error_text, duration_seconds, is_vfr, "
+            "cfr_output_path, cfr_progress, transcribe_progress, cuts_json, "
+            "analysis_reasoning, created_at "
+            "FROM snipcut_jobs ORDER BY created_at DESC LIMIT 20"
+        ).fetchall())
+    finally:
+        conn.close()
+    return jsonify({"jobs": rows})
+
+
+@app.route("/api/snipcut/jobs/<job_id>", methods=["DELETE"])
+def api_snipcut_delete(job_id):
+    conn = get_db()
+    try:
+        conn.execute("DELETE FROM snipcut_jobs WHERE id = ?", (job_id,))
+        conn.commit()
+    finally:
+        conn.close()
     return jsonify({"ok": True})
 
 

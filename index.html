@@ -1031,6 +1031,118 @@
   .cell-note { font-family: var(--sans); font-weight: 500; font-size: 13px; }
   .cell-mono { font-family: var(--mono); color: var(--text-dim); font-size: 11px; }
 
+  /* ── SnipCut ── */
+  .drop-zone {
+    background: var(--surface);
+    border: 2px dashed var(--border);
+    border-radius: 14px;
+    padding: 40px 24px;
+    text-align: center;
+    transition: all 0.2s;
+    cursor: default;
+  }
+  .drop-zone.active {
+    border-color: var(--accent);
+    background: var(--accent-glow);
+    box-shadow: 0 0 0 3px var(--accent-glow);
+  }
+  .drop-zone-icon { font-size: 32px; margin-bottom: 12px; opacity: 0.7; }
+  .drop-zone-title { font-size: 15px; color: var(--text); font-weight: 500; margin-bottom: 4px; }
+  .drop-zone-sub { font-size: 12px; color: var(--text-dim); margin-bottom: 16px; }
+  .drop-zone-hint { font-size: 11px; color: var(--text-dimmer); margin-top: 16px; }
+  .drop-zone-hint input {
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: var(--text);
+    font-family: var(--mono);
+    outline: none;
+  }
+  .drop-zone-hint input:focus { border-color: var(--accent); }
+
+  .snipcut-job-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 14px 16px;
+    margin-bottom: 10px;
+  }
+  .snipcut-job-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    margin-bottom: 10px;
+  }
+  .snipcut-job-title { font-weight: 500; font-size: 13px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .snipcut-job-meta { font-family: var(--mono); font-size: 11px; color: var(--text-dim); margin-top: 2px; }
+
+  .snipcut-progress-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 6px;
+  }
+  .snipcut-progress-label {
+    font-family: var(--mono);
+    font-size: 10px;
+    color: var(--text-dimmer);
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    min-width: 70px;
+    flex-shrink: 0;
+  }
+  .snipcut-progress-bar {
+    flex: 1;
+    height: 6px;
+    background: var(--surface-3);
+    border-radius: 3px;
+    overflow: hidden;
+  }
+  .snipcut-progress-fill {
+    height: 100%;
+    background: var(--accent);
+    transition: width 0.4s ease;
+    border-radius: 3px;
+  }
+  .snipcut-progress-pct {
+    font-family: var(--mono);
+    font-size: 10px;
+    color: var(--text-dim);
+    min-width: 36px;
+    text-align: right;
+  }
+
+  .snipcut-cuts-summary {
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 10px 12px;
+    margin-top: 10px;
+    font-size: 12px;
+    color: var(--text-dim);
+  }
+  .snipcut-cut-row {
+    display: flex;
+    gap: 10px;
+    padding: 6px 0;
+    border-bottom: 1px solid var(--border);
+    font-size: 11px;
+  }
+  .snipcut-cut-row:last-child { border-bottom: none; }
+  .snipcut-cut-time { font-family: var(--mono); color: var(--text-dim); min-width: 80px; }
+  .snipcut-cut-reason {
+    font-family: var(--mono); font-size: 9px;
+    text-transform: uppercase; letter-spacing: 0.5px;
+    padding: 1px 6px; border-radius: 3px;
+    background: var(--surface-3); color: var(--text-dimmer);
+    min-width: 60px; text-align: center;
+  }
+  .snipcut-cut-reason.filler { background: var(--yellow-dim); color: var(--yellow); }
+  .snipcut-cut-reason.repeated_take { background: var(--blue-dim); color: var(--blue); }
+  .snipcut-cut-reason.silence { background: var(--surface-3); color: var(--text-dimmer); }
+  .snipcut-cut-content { flex: 1; color: var(--text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
   /* ── Step Bar ── */
   .step-bar {
     display: flex;
@@ -1117,6 +1229,7 @@
   <div class="tabs">
     <button class="tab active" data-view="new" onclick="switchView('new')">New Session</button>
     <button class="tab" data-view="clips" onclick="switchView('clips')">Clips</button>
+    <button class="tab" data-view="snipcut" onclick="switchView('snipcut')">SnipCut</button>
     <button class="tab" data-view="history" onclick="switchView('history')">History</button>
   </div>
 
@@ -1188,6 +1301,23 @@
         <div class="empty-sub">Create a new session to get started</div>
       </div>
     </div>
+  </div>
+
+  <!-- ══ SNIPCUT VIEW ══ -->
+  <div class="view" id="view-snipcut">
+    <div class="section-label" style="margin-bottom:10px;">SnipCut · AI rough-cut pipeline</div>
+    <div id="snipcutContent">
+      <div id="snipcutDropZone" class="drop-zone">
+        <div class="drop-zone-icon">&#127916;</div>
+        <div class="drop-zone-title">Drop an MP4 here</div>
+        <div class="drop-zone-sub">StreamYard recording → CFR conversion + AI cut detection</div>
+        <div class="drop-zone-hint">
+          Or paste path: <input type="text" id="snipcutPathInput" placeholder="/path/to/video.mp4" style="font-family:var(--mono);font-size:11px;width:280px;padding:6px 10px;margin-top:8px;">
+          <button class="btn-ghost btn-sm" onclick="snipcutSubmitPath()" style="margin-left:6px;">Start</button>
+        </div>
+      </div>
+    </div>
+    <div id="snipcutRecentList" style="margin-top:24px;"></div>
   </div>
 
   <!-- ══ HISTORY VIEW ══ -->
@@ -1289,6 +1419,7 @@ function switchView(name) {
   if (name !== 'clips') { const b = $('stepBar'); if (b) b.style.display = 'none'; }
   if (name === 'history') loadHistory();
   if (name === 'clips' && currentSessionId) loadSession(currentSessionId);
+  if (name === 'snipcut') loadSnipcutJobs();
 }
 
 // ── Dep check + config ──
@@ -2444,6 +2575,151 @@ async function gatherSession(sessionId) {
   startPolling(sessionId);
   loadSession(sessionId);
 }
+
+// ── SnipCut ──
+let snipcutPollTimer = null;
+const SNIPCUT_DONE_STATUSES = ['done', 'error'];
+
+function snipcutStartFromPath(path) {
+  if (!path || !path.trim()) { toast('Enter a file path'); return; }
+  fetch('/api/snipcut/jobs', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({ input_path: path.trim() }),
+  }).then(r => r.json()).then(d => {
+    if (d.error) { toast(d.error); return; }
+    loadSnipcutJobs();
+    startSnipcutPolling();
+  }).catch(() => toast('Failed to start job'));
+}
+
+function snipcutSubmitPath() {
+  const el = $('snipcutPathInput');
+  if (el) { snipcutStartFromPath(el.value); el.value = ''; }
+}
+
+async function loadSnipcutJobs() {
+  try {
+    const r = await fetch('/api/snipcut/jobs');
+    const d = await r.json();
+    const list = $('snipcutRecentList');
+    if (!list) return;
+    const jobs = d.jobs || [];
+    if (jobs.length === 0) { list.innerHTML = ''; return; }
+
+    let html = '<div class="section-label">Recent Jobs</div>';
+    jobs.forEach(j => { html += renderSnipcutJobCard(j); });
+    list.innerHTML = html;
+
+    // Keep polling if anything is active
+    const anyActive = jobs.some(j => !SNIPCUT_DONE_STATUSES.includes(j.status));
+    if (anyActive) startSnipcutPolling(); else stopSnipcutPolling();
+  } catch(e) { /* silent */ }
+}
+
+function renderSnipcutJobCard(j) {
+  const durMin = j.duration_seconds ? (j.duration_seconds / 60).toFixed(1) : '—';
+  const vfrBadge = j.is_vfr ? '<span class="clip-badge downloading" style="font-size:9px;">VFR → CFR</span>'
+                             : '<span class="clip-badge ready" style="font-size:9px;">CFR</span>';
+
+  let body = '';
+  if (j.status === 'error') {
+    body = `<div class="clip-error" style="margin-top:6px;">${esc(j.error_text || 'Unknown error').slice(0, 200)}</div>`;
+  } else if (j.status === 'done') {
+    const cuts = j.cuts_json ? JSON.parse(j.cuts_json) : [];
+    const totalCutTime = cuts.reduce((sum, c) => sum + (c.end - c.start), 0);
+    body = `
+      <div class="snipcut-cuts-summary">
+        <strong style="color:var(--text);">${cuts.length}</strong> cuts detected
+        &middot; <strong style="color:var(--text);">${totalCutTime.toFixed(1)}s</strong> removed
+        &middot; final ~${(j.duration_seconds - totalCutTime).toFixed(0)}s
+        ${j.analysis_reasoning ? `<div style="margin-top:6px;color:var(--text-dimmer);font-size:11px;">${esc(j.analysis_reasoning)}</div>` : ''}
+      </div>
+      ${cuts.length > 0 ? '<div style="margin-top:8px;max-height:200px;overflow-y:auto;">' +
+        cuts.slice(0, 50).map(c => `
+          <div class="snipcut-cut-row">
+            <span class="snipcut-cut-time">${fmtTime(c.start)}—${fmtTime(c.end)}</span>
+            <span class="snipcut-cut-reason ${c.reason || 'filler'}">${esc(c.reason || 'cut')}</span>
+            <span class="snipcut-cut-content">${esc((c.content || '').slice(0, 80))}</span>
+          </div>`).join('') + '</div>' : ''}
+    `;
+  } else {
+    // In-progress: show two parallel progress bars
+    const cfrPct = j.cfr_progress || 0;
+    const txPct = j.transcribe_progress || 0;
+    body = `
+      <div class="snipcut-progress-row">
+        <div class="snipcut-progress-label">CFR</div>
+        <div class="snipcut-progress-bar"><div class="snipcut-progress-fill" style="width:${cfrPct}%"></div></div>
+        <div class="snipcut-progress-pct">${cfrPct.toFixed(0)}%</div>
+      </div>
+      <div class="snipcut-progress-row">
+        <div class="snipcut-progress-label">Transcribe</div>
+        <div class="snipcut-progress-bar"><div class="snipcut-progress-fill" style="width:${txPct}%"></div></div>
+        <div class="snipcut-progress-pct">${txPct.toFixed(0)}%</div>
+      </div>
+      ${j.status === 'analyzing' ? '<div style="font-size:11px;color:var(--accent);margin-top:6px;">&#129302; Analyzing with Claude…</div>' : ''}
+    `;
+  }
+
+  const statusBadge = j.status === 'done'
+    ? '<span class="clip-badge exported" style="font-size:9px;">Done</span>'
+    : j.status === 'error'
+      ? '<span class="clip-badge error" style="font-size:9px;">Error</span>'
+      : `<span class="clip-badge analyzing" style="font-size:9px;">${esc(j.status)}</span>`;
+
+  return `<div class="snipcut-job-card">
+    <div class="snipcut-job-header">
+      <div style="flex:1;min-width:0;">
+        <div class="snipcut-job-title">${esc(j.input_filename || 'Untitled')}</div>
+        <div class="snipcut-job-meta">${durMin}min${j.is_vfr !== null ? ' · ' : ''}${j.is_vfr ? 'VFR' : (j.is_vfr === 0 ? 'CFR' : '')}</div>
+      </div>
+      <div style="display:flex;gap:6px;align-items:center;flex-shrink:0;">
+        ${vfrBadge}
+        ${statusBadge}
+        <button class="delete-btn" onclick="snipcutDelete('${j.id}')" title="Delete job">&#10005;</button>
+      </div>
+    </div>
+    ${body}
+  </div>`;
+}
+
+async function snipcutDelete(jobId) {
+  await fetch(`/api/snipcut/jobs/${jobId}`, { method: 'DELETE' });
+  loadSnipcutJobs();
+}
+
+function startSnipcutPolling() {
+  if (snipcutPollTimer) return;
+  snipcutPollTimer = setInterval(loadSnipcutJobs, 2000);
+}
+
+function stopSnipcutPolling() {
+  if (snipcutPollTimer) { clearInterval(snipcutPollTimer); snipcutPollTimer = null; }
+}
+
+// Drag-and-drop wiring
+(function() {
+  const zone = () => $('snipcutDropZone');
+  function prevent(e) { e.preventDefault(); e.stopPropagation(); }
+  document.addEventListener('DOMContentLoaded', () => {
+    const dz = zone();
+    if (!dz) return;
+    ['dragenter', 'dragover'].forEach(ev => dz.addEventListener(ev, (e) => { prevent(e); dz.classList.add('active'); }));
+    ['dragleave', 'drop'].forEach(ev => dz.addEventListener(ev, (e) => { prevent(e); dz.classList.remove('active'); }));
+    dz.addEventListener('drop', (e) => {
+      const file = e.dataTransfer.files[0];
+      if (!file) return;
+      // pywebview exposes file.path on native drops
+      const path = file.path || '';
+      if (!path) {
+        toast('No file path — pywebview may not expose it. Paste path manually.');
+        return;
+      }
+      snipcutStartFromPath(path);
+    });
+  });
+})();
 
 // ── History ──
 let historyExpandedGroups = new Set(); // track which sessions are expanded
