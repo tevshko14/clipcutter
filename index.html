@@ -1113,6 +1113,57 @@
     text-align: right;
   }
 
+  .snipcut-stepper {
+    display: flex;
+    align-items: center;
+    gap: 0;
+    margin-top: 4px;
+  }
+  .snipcut-step { display: flex; flex-direction: column; align-items: center; gap: 4px; flex-shrink: 0; }
+  .snipcut-step-dot {
+    width: 22px; height: 22px;
+    border-radius: 50%;
+    display: grid; place-items: center;
+    font-family: var(--mono);
+    font-size: 10px;
+    font-weight: 700;
+    border: 2px solid var(--border);
+    background: var(--surface);
+    color: var(--text-dimmer);
+    transition: all 0.2s;
+  }
+  .snipcut-step.active .snipcut-step-dot {
+    border-color: var(--accent);
+    background: var(--accent);
+    color: #fff;
+    box-shadow: 0 0 10px var(--accent-glow);
+    animation: pulse 1.5s ease-in-out infinite;
+  }
+  .snipcut-step.done .snipcut-step-dot {
+    border-color: var(--green-border);
+    background: var(--green-dim);
+    color: var(--green);
+  }
+  .snipcut-step-label {
+    font-family: var(--mono);
+    font-size: 9px;
+    color: var(--text-dimmer);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    white-space: nowrap;
+  }
+  .snipcut-step.active .snipcut-step-label { color: var(--text); }
+  .snipcut-step.done .snipcut-step-label { color: var(--green); }
+  .snipcut-step-connector {
+    flex: 1;
+    height: 2px;
+    background: var(--border);
+    margin: 0 4px;
+    margin-bottom: 14px;
+    transition: background 0.2s;
+  }
+  .snipcut-step-connector.done { background: var(--green-border); }
+
   .snipcut-cuts-summary {
     background: var(--surface-2);
     border: 1px solid var(--border);
@@ -1451,6 +1502,15 @@ function switchView(name) {
       if (hint) hint.style.display = 'flex';
     } else {
       loadRecentSessions(sessData.sessions);
+    }
+
+    // Check for a pending file from "Open With → ClipCutter"
+    const pendingRes = await fetch('/api/snipcut/pending-file');
+    const pendingData = await pendingRes.json();
+    if (pendingData.path) {
+      switchView('snipcut');
+      toast('Starting SnipCut job…');
+      snipcutStartFromPath(pendingData.path);
     }
   } catch(e) {}
 })();
@@ -2651,6 +2711,7 @@ function renderSnipcutJobCard(j) {
         <button class="btn-primary btn-sm" onclick="snipcutOpenInResolve('${j.id}')">&#127916; Open in DaVinci Resolve</button>
         ${j.edl_path ? `<button class="btn-ghost btn-sm" onclick="snipcutRevealFile('${(j.edl_path).replace(/'/g, "\\'")}')" style="font-family:var(--mono);font-size:10px;" title="Reveal EDL in Finder">EDL</button>` : ''}
         ${j.cfr_output_path ? `<button class="btn-ghost btn-sm" onclick="snipcutRevealFile('${(j.cfr_output_path).replace(/'/g, "\\'")}')" style="font-family:var(--mono);font-size:10px;" title="Reveal CFR file in Finder">CFR</button>` : ''}
+        ${j.transcript_path ? `<button class="btn-ghost btn-sm" onclick="snipcutRevealFile('${(j.transcript_path).replace(/'/g, "\\'")}')" style="font-family:var(--mono);font-size:10px;" title="Reveal transcript in Finder">TXT</button>` : ''}
       </div>
       ${resolveBanner}
       ${cuts.length > 0 ? '<div style="margin-top:8px;max-height:200px;overflow-y:auto;">' +
@@ -2662,22 +2723,50 @@ function renderSnipcutJobCard(j) {
           </div>`).join('') + '</div>' : ''}
     `;
   } else {
-    // In-progress: show two parallel progress bars
+    // In-progress: show stage stepper + parallel progress bars
     const cfrPct = j.cfr_progress || 0;
     const txPct = j.transcribe_progress || 0;
-    body = `
-      <div class="snipcut-progress-row">
-        <div class="snipcut-progress-label">CFR</div>
-        <div class="snipcut-progress-bar"><div class="snipcut-progress-fill" style="width:${cfrPct}%"></div></div>
-        <div class="snipcut-progress-pct">${cfrPct.toFixed(0)}%</div>
-      </div>
-      <div class="snipcut-progress-row">
-        <div class="snipcut-progress-label">Transcribe</div>
-        <div class="snipcut-progress-bar"><div class="snipcut-progress-fill" style="width:${txPct}%"></div></div>
-        <div class="snipcut-progress-pct">${txPct.toFixed(0)}%</div>
-      </div>
-      ${j.status === 'analyzing' ? '<div style="font-size:11px;color:var(--accent);margin-top:6px;">&#129302; Analyzing with Claude…</div>' : ''}
-    `;
+    const stageOrder = ['probing', 'processing', 'analyzing', 'generating_edl', 'done'];
+    const stageLabels = {
+      probing: 'Probe',
+      processing: 'Convert + Transcribe',
+      analyzing: 'Analyze',
+      generating_edl: 'Generate EDL',
+      done: 'Done',
+    };
+    const currentIdx = stageOrder.indexOf(j.status);
+
+    let stepper = '<div class="snipcut-stepper">';
+    stageOrder.forEach((stage, i) => {
+      const state = i < currentIdx ? 'done' : i === currentIdx ? 'active' : 'pending';
+      stepper += `<div class="snipcut-step ${state}">
+        <div class="snipcut-step-dot">${i < currentIdx ? '✓' : i + 1}</div>
+        <div class="snipcut-step-label">${stageLabels[stage]}</div>
+      </div>`;
+      if (i < stageOrder.length - 1) stepper += `<div class="snipcut-step-connector ${state === 'done' ? 'done' : ''}"></div>`;
+    });
+    stepper += '</div>';
+
+    body = stepper;
+    if (j.status === 'processing') {
+      body += `
+        <div class="snipcut-progress-row" style="margin-top:10px;">
+          <div class="snipcut-progress-label">CFR</div>
+          <div class="snipcut-progress-bar"><div class="snipcut-progress-fill" style="width:${cfrPct}%"></div></div>
+          <div class="snipcut-progress-pct">${cfrPct.toFixed(0)}%</div>
+        </div>
+        <div class="snipcut-progress-row">
+          <div class="snipcut-progress-label">Transcribe</div>
+          <div class="snipcut-progress-bar"><div class="snipcut-progress-fill" style="width:${txPct}%"></div></div>
+          <div class="snipcut-progress-pct">${txPct.toFixed(0)}%</div>
+        </div>`;
+    } else if (j.status === 'analyzing') {
+      body += '<div style="font-size:11px;color:var(--accent);margin-top:10px;">&#129302; Analyzing with Claude Sonnet…</div>';
+    } else if (j.status === 'generating_edl') {
+      body += '<div style="font-size:11px;color:var(--accent);margin-top:10px;">&#9999;&#65039; Merging cuts and writing EDL…</div>';
+    } else if (j.status === 'probing') {
+      body += '<div style="font-size:11px;color:var(--text-dim);margin-top:10px;">Probing video metadata…</div>';
+    }
   }
 
   const statusBadge = j.status === 'done'

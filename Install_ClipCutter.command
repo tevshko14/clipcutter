@@ -108,7 +108,8 @@ fi
 "$VENV/bin/pip" install -q flask pywebview yt-dlp openai-whisper anthropic faster-whisper 2>/dev/null
 
 cd "$INSTALL_DIR"
-exec "$PYTHON" clipcutter.py
+# Forward "$@" so right-click "Open With ClipCutter" passes the file path through
+exec "$PYTHON" clipcutter.py "$@"
 LAUNCHER
 chmod +x "$APP_PATH/Contents/MacOS/launcher"
 
@@ -131,9 +132,27 @@ cat > "$APP_PATH/Contents/Info.plist" << PLIST
     <string>icon</string>
     <key>NSHighResolutionCapable</key>
     <true/>
+    <key>CFBundleDocumentTypes</key>
+    <array>
+      <dict>
+        <key>CFBundleTypeName</key>
+        <string>MPEG-4 Video</string>
+        <key>CFBundleTypeRole</key>
+        <string>Viewer</string>
+        <key>LSItemContentTypes</key>
+        <array>
+          <string>public.mpeg-4</string>
+        </array>
+        <key>LSHandlerRank</key>
+        <string>Alternate</string>
+      </dict>
+    </array>
 </dict>
 </plist>
 PLIST
+
+# Register the .app with LaunchServices so right-click "Open With" sees it
+/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f "$APP_PATH" 2>/dev/null || true
 
 echo ""
 echo "  ═══════════════════════════════════════"

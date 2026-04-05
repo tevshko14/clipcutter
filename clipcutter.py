@@ -184,6 +184,7 @@ def init_db():
         "ALTER TABLE sessions ADD COLUMN stream_captions TEXT DEFAULT ''",
         "ALTER TABLE snipcut_jobs ADD COLUMN edl_path TEXT DEFAULT ''",
         "ALTER TABLE snipcut_jobs ADD COLUMN resolve_status TEXT DEFAULT ''",
+        "ALTER TABLE snipcut_jobs ADD COLUMN transcript_path TEXT DEFAULT ''",
     ]:
         try:
             conn.execute(migration)
@@ -1497,6 +1498,44 @@ def snipcut_compute_keeps(cuts: list, total_duration: float) -> list:
     return [k for k in keeps if (k["end"] - k["start"]) > 0.1]
 
 
+def snipcut_generate_clean_transcript(words: list, cuts: list, output_path: str):
+    """Reconstruct transcript text with cut words removed.
+    A word is removed if its midpoint falls inside any cut range."""
+    sorted_cuts = sorted(cuts, key=lambda c: c["start"])
+
+    def in_any_cut(midpoint: float) -> bool:
+        for c in sorted_cuts:
+            if c["start"] <= midpoint <= c["end"]:
+                return True
+            if c["start"] > midpoint:
+                break
+        return False
+
+    kept_words = []
+    for w in words:
+        mid = (w["start"] + w["end"]) / 2
+        if not in_any_cut(mid):
+            kept_words.append(w["word"].strip())
+
+    # Simple reflow: join words with spaces, wrap at ~80 chars
+    text = " ".join(kept_words)
+    lines = []
+    current = []
+    current_len = 0
+    for word in text.split():
+        if current_len + len(word) + 1 > 80 and current:
+            lines.append(" ".join(current))
+            current = [word]
+            current_len = len(word)
+        else:
+            current.append(word)
+            current_len += len(word) + 1
+    if current:
+        lines.append(" ".join(current))
+
+    Path(output_path).write_text("\n".join(lines) + "\n")
+
+
 def snipcut_generate_edl(keeps: list, edl_path: str, title: str, source_name: str = "AX", fps: int = 30):
     """Write a CMX 3600 EDL file.
     Each 'keep' segment becomes an event; record timecodes are sequential."""
@@ -1682,11 +1721,16 @@ def snipcut_process(job_id: str):
         _snipcut_update(job_id, status="generating_edl")
         merged_cuts = snipcut_merge_cuts(ai_cuts, silence_gaps)
         keeps = snipcut_compute_keeps(merged_cuts, info["duration"])
-        # EDL goes next to the CFR file
+        # EDL + clean transcript go next to the CFR file
         edl_path = str(Path(cfr_output).with_suffix(".edl"))
         title = Path(input_path).stem
         snipcut_generate_edl(keeps, edl_path, title)
-        _snipcut_update(job_id, edl_path=edl_path, status="done")
+
+        # Step 6: clean transcript — full transcript with cut words removed
+        transcript_path = str(Path(input_path).with_name(f"{title}_transcript.txt"))
+        snipcut_generate_clean_transcript(words, merged_cuts, transcript_path)
+
+        _snipcut_update(job_id, edl_path=edl_path, transcript_path=transcript_path, status="done")
 
     except Exception as e:
         # Clean up partial output
@@ -2347,7 +2391,7 @@ def api_snipcut_list():
         rows = rows_to_list(conn.execute(
             "SELECT id, input_filename, status, error_text, duration_seconds, is_vfr, "
             "cfr_output_path, cfr_progress, transcribe_progress, cuts_json, "
-            "analysis_reasoning, edl_path, resolve_status, created_at "
+            "analysis_reasoning, edl_path, resolve_status, transcript_path, created_at "
             "FROM snipcut_jobs ORDER BY created_at DESC LIMIT 20"
         ).fetchall())
     finally:
@@ -2364,6 +2408,16 @@ def api_snipcut_delete(job_id):
     finally:
         conn.close()
     return jsonify({"ok": True})
+
+
+@app.route("/api/snipcut/pending-file")
+def api_snipcut_pending_file():
+    """Return the file path passed via 'Open With ClipCutter' if not yet consumed."""
+    if _pending_file["path"] and not _pending_file["consumed"]:
+        path = _pending_file["path"]
+        _pending_file["consumed"] = True
+        return jsonify({"path": path})
+    return jsonify({"path": None})
 
 
 @app.route("/api/snipcut/jobs/<job_id>/open-resolve", methods=["POST"])
@@ -2399,6 +2453,10 @@ def api_snipcut_open_resolve(job_id):
 # ---------- Entry Point ----------
 
 
+# Pending file from "Open With → ClipCutter" (or drag-drop onto .app)
+_pending_file = {"path": None, "consumed": False}
+
+
 def start_server():
     """Run Flask in a background thread."""
     app.run(host="127.0.0.1", port=5557, debug=False, use_reloader=False)
@@ -2411,6 +2469,13 @@ def main():
     # Initialize config
     if not CONFIG_PATH.exists():
         save_config(DEFAULT_CONFIG)
+
+    # Check for file passed via sys.argv (right-click "Open With")
+    if len(sys.argv) > 1:
+        candidate = sys.argv[1]
+        if os.path.isfile(candidate) and candidate.lower().endswith(".mp4"):
+            _pending_file["path"] = os.path.abspath(candidate)
+            print(f"  Queued for SnipCut: {Path(candidate).name}")
 
     missing = check_system_deps()
     if missing:
