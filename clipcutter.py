@@ -182,6 +182,8 @@ def init_db():
         "ALTER TABLE clips ADD COLUMN trimmed_transcript TEXT DEFAULT ''",
         "ALTER TABLE sessions ADD COLUMN gather_phase TEXT DEFAULT ''",
         "ALTER TABLE sessions ADD COLUMN stream_captions TEXT DEFAULT ''",
+        "ALTER TABLE snipcut_jobs ADD COLUMN edl_path TEXT DEFAULT ''",
+        "ALTER TABLE snipcut_jobs ADD COLUMN resolve_status TEXT DEFAULT ''",
     ]:
         try:
             conn.execute(migration)
@@ -1430,6 +1432,178 @@ If nothing needs cutting, return {{"cuts": [], "reasoning": "Clean delivery"}}."
     return json.loads(text)
 
 
+def snipcut_seconds_to_tc(seconds: float, fps: int = 30) -> str:
+    """Convert seconds to HH:MM:SS:FF timecode for EDL."""
+    total_frames = round(seconds * fps)
+    ff = total_frames % fps
+    total_seconds = total_frames // fps
+    ss = total_seconds % 60
+    total_minutes = total_seconds // 60
+    mm = total_minutes % 60
+    hh = total_minutes // 60
+    return f"{hh:02d}:{mm:02d}:{ss:02d}:{ff:02d}"
+
+
+def snipcut_merge_cuts(ai_cuts: list, silence_gaps: list, min_merge_gap: float = 0.2) -> list:
+    """Merge AI cuts + silence gaps into a unified sorted cut list.
+    Adjacent/overlapping cuts are consolidated."""
+    all_cuts = []
+    for c in ai_cuts:
+        try:
+            all_cuts.append({
+                "start": float(c["start"]), "end": float(c["end"]),
+                "reason": c.get("reason", "filler"),
+            })
+        except (KeyError, ValueError, TypeError):
+            continue
+    for g in silence_gaps:
+        try:
+            all_cuts.append({
+                "start": float(g["start"]), "end": float(g["end"]),
+                "reason": "silence",
+            })
+        except (KeyError, ValueError, TypeError):
+            continue
+
+    if not all_cuts:
+        return []
+
+    # Sort by start, then merge overlapping/adjacent
+    all_cuts.sort(key=lambda c: c["start"])
+    merged = [all_cuts[0]]
+    for c in all_cuts[1:]:
+        last = merged[-1]
+        if c["start"] <= last["end"] + min_merge_gap:
+            last["end"] = max(last["end"], c["end"])
+            # Combine reasons if different
+            if c["reason"] != last["reason"] and "merged" not in last["reason"]:
+                last["reason"] = "merged"
+        else:
+            merged.append(c)
+    return merged
+
+
+def snipcut_compute_keeps(cuts: list, total_duration: float) -> list:
+    """Given sorted merged cuts, return the inverse 'keep' segments."""
+    keeps = []
+    cursor = 0.0
+    for c in cuts:
+        if c["start"] > cursor:
+            keeps.append({"start": cursor, "end": c["start"]})
+        cursor = max(cursor, c["end"])
+    if cursor < total_duration:
+        keeps.append({"start": cursor, "end": total_duration})
+    # Filter out tiny segments (< 0.1s)
+    return [k for k in keeps if (k["end"] - k["start"]) > 0.1]
+
+
+def snipcut_generate_edl(keeps: list, edl_path: str, title: str, source_name: str = "AX", fps: int = 30):
+    """Write a CMX 3600 EDL file.
+    Each 'keep' segment becomes an event; record timecodes are sequential."""
+    lines = [f"TITLE: {title}", "FCM: NON-DROP FRAME", ""]
+    record_cursor = 0.0
+    for i, keep in enumerate(keeps, start=1):
+        src_in = snipcut_seconds_to_tc(keep["start"], fps)
+        src_out = snipcut_seconds_to_tc(keep["end"], fps)
+        rec_in = snipcut_seconds_to_tc(record_cursor, fps)
+        duration = keep["end"] - keep["start"]
+        record_cursor += duration
+        rec_out = snipcut_seconds_to_tc(record_cursor, fps)
+        # Event format: EDIT# REEL CHANNELS TRANSITION SRC_IN SRC_OUT REC_IN REC_OUT
+        lines.append(f"{i:03d}  {source_name:<8} AA/V  C        {src_in} {src_out} {rec_in} {rec_out}")
+    lines.append("")
+    Path(edl_path).write_text("\n".join(lines))
+
+
+def _get_resolve_script_module():
+    """Load DaVinciResolveScript. Returns module or None if unavailable."""
+    script_api = "/Library/Application Support/Blackmagic Design/DaVinci Resolve/Developer/Scripting"
+    script_lib = "/Applications/DaVinci Resolve/DaVinci Resolve.app/Contents/Libraries/Fusion/fusionscript.so"
+    if not os.path.exists(script_api):
+        return None
+    os.environ.setdefault("RESOLVE_SCRIPT_API", script_api)
+    os.environ.setdefault("RESOLVE_SCRIPT_LIB", script_lib)
+    modules_dir = os.path.join(script_api, "Modules")
+    if modules_dir not in sys.path:
+        sys.path.insert(0, modules_dir)
+    try:
+        import DaVinciResolveScript as dvr  # type: ignore
+        return dvr
+    except ImportError:
+        return None
+
+
+def snipcut_open_in_resolve(cfr_path: str, edl_path: str, project_name: str) -> dict:
+    """Launch/connect to DaVinci Resolve and import the clip + EDL.
+    Returns {ok, message} or {error, message}."""
+    if not os.path.exists(cfr_path):
+        return {"error": "CFR file not found"}
+    if not os.path.exists(edl_path):
+        return {"error": "EDL file not found"}
+
+    dvr = _get_resolve_script_module()
+    if dvr is None:
+        return {"error": "DaVinci Resolve scripting module not found. Is Resolve installed?"}
+
+    # Connect, or launch if not running
+    resolve = dvr.scriptapp("Resolve")
+    if resolve is None:
+        # Try launching Resolve
+        subprocess.Popen(["open", "-a", "DaVinci Resolve"])
+        # Wait up to 45s for API to respond
+        import time
+        for _ in range(45):
+            time.sleep(1)
+            resolve = dvr.scriptapp("Resolve")
+            if resolve is not None:
+                break
+        if resolve is None:
+            return {"error": "DaVinci Resolve didn't respond. Is External Scripting enabled in Preferences → System?"}
+
+    try:
+        pm = resolve.GetProjectManager()
+        if pm is None:
+            return {"error": "Could not get ProjectManager"}
+
+        # Create project with unique name if needed
+        final_name = project_name
+        project = pm.CreateProject(final_name)
+        if project is None:
+            # Name already taken — try appending a number
+            for n in range(2, 20):
+                candidate = f"{project_name} ({n})"
+                project = pm.CreateProject(candidate)
+                if project is not None:
+                    final_name = candidate
+                    break
+            if project is None:
+                # Try loading the existing project
+                if pm.LoadProject(project_name):
+                    project = pm.GetCurrentProject()
+                    final_name = project_name
+
+        if project is None:
+            return {"error": f"Could not create or open project '{project_name}'"}
+
+        mp = project.GetMediaPool()
+        if mp is None:
+            return {"error": "Could not get MediaPool"}
+
+        # Import the CFR video
+        media = mp.ImportMedia([cfr_path])
+        if not media:
+            return {"error": "Failed to import CFR file into media pool"}
+
+        # Import EDL as a timeline
+        timeline = mp.ImportTimelineFromFile(edl_path)
+        if timeline is None:
+            return {"error": "Project created + media imported, but EDL import failed. Import manually from File → Import Timeline → Pre-Conformed EDL."}
+
+        return {"ok": True, "project": final_name, "message": f"Opened in DaVinci Resolve as project '{final_name}'"}
+    except Exception as e:
+        return {"error": f"Resolve API error: {str(e)[:200]}"}
+
+
 def snipcut_process(job_id: str):
     """Main orchestrator: probe → parallel(CFR + transcribe) → analyze → done."""
     import concurrent.futures
@@ -1499,10 +1673,20 @@ def snipcut_process(job_id: str):
         api_key = load_config().get("api_key", "")
         result = snipcut_analyze(words, api_key)
 
+        ai_cuts = result.get("cuts", [])
         _snipcut_update(job_id,
-                        cuts_json=json.dumps(result.get("cuts", [])),
-                        analysis_reasoning=result.get("reasoning", ""),
-                        status="done")
+                        cuts_json=json.dumps(ai_cuts),
+                        analysis_reasoning=result.get("reasoning", ""))
+
+        # Step 5: EDL generation — merge AI cuts + silence gaps, compute keeps, write EDL
+        _snipcut_update(job_id, status="generating_edl")
+        merged_cuts = snipcut_merge_cuts(ai_cuts, silence_gaps)
+        keeps = snipcut_compute_keeps(merged_cuts, info["duration"])
+        # EDL goes next to the CFR file
+        edl_path = str(Path(cfr_output).with_suffix(".edl"))
+        title = Path(input_path).stem
+        snipcut_generate_edl(keeps, edl_path, title)
+        _snipcut_update(job_id, edl_path=edl_path, status="done")
 
     except Exception as e:
         # Clean up partial output
@@ -2163,7 +2347,7 @@ def api_snipcut_list():
         rows = rows_to_list(conn.execute(
             "SELECT id, input_filename, status, error_text, duration_seconds, is_vfr, "
             "cfr_output_path, cfr_progress, transcribe_progress, cuts_json, "
-            "analysis_reasoning, created_at "
+            "analysis_reasoning, edl_path, resolve_status, created_at "
             "FROM snipcut_jobs ORDER BY created_at DESC LIMIT 20"
         ).fetchall())
     finally:
@@ -2180,6 +2364,36 @@ def api_snipcut_delete(job_id):
     finally:
         conn.close()
     return jsonify({"ok": True})
+
+
+@app.route("/api/snipcut/jobs/<job_id>/open-resolve", methods=["POST"])
+def api_snipcut_open_resolve(job_id):
+    conn = get_db()
+    try:
+        job = row_to_dict(conn.execute(
+            "SELECT input_filename, cfr_output_path, edl_path FROM snipcut_jobs WHERE id = ?",
+            (job_id,)
+        ).fetchone())
+    finally:
+        conn.close()
+    if not job:
+        return jsonify({"error": "Job not found"}), 404
+    if not job["cfr_output_path"] or not job["edl_path"]:
+        return jsonify({"error": "Job not yet complete"}), 400
+
+    project_name = Path(job["input_filename"]).stem  # "042 - SOFI.mp4" → "042 - SOFI"
+
+    # Run in a thread so HTTP doesn't block — but poll result via UI
+    def run_open():
+        _snipcut_update(job_id, resolve_status="opening")
+        result = snipcut_open_in_resolve(job["cfr_output_path"], job["edl_path"], project_name)
+        if result.get("ok"):
+            _snipcut_update(job_id, resolve_status=f"opened:{result.get('project', '')}")
+        else:
+            _snipcut_update(job_id, resolve_status=f"error:{result.get('error', 'unknown')}")
+
+    threading.Thread(target=run_open, daemon=True).start()
+    return jsonify({"ok": True, "message": "Opening in DaVinci Resolve…"})
 
 
 # ---------- Entry Point ----------

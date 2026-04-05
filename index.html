@@ -2611,8 +2611,9 @@ async function loadSnipcutJobs() {
     jobs.forEach(j => { html += renderSnipcutJobCard(j); });
     list.innerHTML = html;
 
-    // Keep polling if anything is active
-    const anyActive = jobs.some(j => !SNIPCUT_DONE_STATUSES.includes(j.status));
+    // Keep polling if anything is active (including Resolve opening)
+    const anyActive = jobs.some(j => !SNIPCUT_DONE_STATUSES.includes(j.status)
+      || (j.resolve_status || '').startsWith('opening'));
     if (anyActive) startSnipcutPolling(); else stopSnipcutPolling();
   } catch(e) { /* silent */ }
 }
@@ -2628,6 +2629,17 @@ function renderSnipcutJobCard(j) {
   } else if (j.status === 'done') {
     const cuts = j.cuts_json ? JSON.parse(j.cuts_json) : [];
     const totalCutTime = cuts.reduce((sum, c) => sum + (c.end - c.start), 0);
+    // Resolve status
+    let resolveState = j.resolve_status || '';
+    let resolveBanner = '';
+    if (resolveState.startsWith('opening')) {
+      resolveBanner = '<div style="margin-top:10px;color:var(--blue);font-size:11px;">&#128250; Opening in DaVinci Resolve…</div>';
+    } else if (resolveState.startsWith('opened:')) {
+      resolveBanner = `<div style="margin-top:10px;color:var(--green);font-size:11px;">&#10003; Opened as: ${esc(resolveState.slice(7))}</div>`;
+    } else if (resolveState.startsWith('error:')) {
+      resolveBanner = `<div style="margin-top:10px;color:var(--red);font-size:11px;">&#9888; ${esc(resolveState.slice(6))}</div>`;
+    }
+
     body = `
       <div class="snipcut-cuts-summary">
         <strong style="color:var(--text);">${cuts.length}</strong> cuts detected
@@ -2635,6 +2647,12 @@ function renderSnipcutJobCard(j) {
         &middot; final ~${(j.duration_seconds - totalCutTime).toFixed(0)}s
         ${j.analysis_reasoning ? `<div style="margin-top:6px;color:var(--text-dimmer);font-size:11px;">${esc(j.analysis_reasoning)}</div>` : ''}
       </div>
+      <div style="display:flex;gap:8px;margin-top:10px;align-items:center;flex-wrap:wrap;">
+        <button class="btn-primary btn-sm" onclick="snipcutOpenInResolve('${j.id}')">&#127916; Open in DaVinci Resolve</button>
+        ${j.edl_path ? `<button class="btn-ghost btn-sm" onclick="snipcutRevealFile('${(j.edl_path).replace(/'/g, "\\'")}')" style="font-family:var(--mono);font-size:10px;" title="Reveal EDL in Finder">EDL</button>` : ''}
+        ${j.cfr_output_path ? `<button class="btn-ghost btn-sm" onclick="snipcutRevealFile('${(j.cfr_output_path).replace(/'/g, "\\'")}')" style="font-family:var(--mono);font-size:10px;" title="Reveal CFR file in Finder">CFR</button>` : ''}
+      </div>
+      ${resolveBanner}
       ${cuts.length > 0 ? '<div style="margin-top:8px;max-height:200px;overflow-y:auto;">' +
         cuts.slice(0, 50).map(c => `
           <div class="snipcut-cut-row">
@@ -2687,6 +2705,24 @@ function renderSnipcutJobCard(j) {
 async function snipcutDelete(jobId) {
   await fetch(`/api/snipcut/jobs/${jobId}`, { method: 'DELETE' });
   loadSnipcutJobs();
+}
+
+async function snipcutOpenInResolve(jobId) {
+  const r = await fetch(`/api/snipcut/jobs/${jobId}/open-resolve`, { method: 'POST' });
+  const d = await r.json();
+  if (d.error) { toast(d.error); return; }
+  toast('Opening in DaVinci Resolve…');
+  startSnipcutPolling();
+}
+
+async function snipcutRevealFile(filePath) {
+  // Reveal in Finder by opening the containing folder
+  const folder = filePath.substring(0, filePath.lastIndexOf('/'));
+  await fetch('/api/open-folder', {
+    method: 'POST',
+    headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({path: folder}),
+  });
 }
 
 function startSnipcutPolling() {
