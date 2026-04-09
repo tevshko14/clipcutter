@@ -1689,13 +1689,15 @@ def snipcut_open_in_resolve(cfr_path: str, edl_path: str, project_name: str) -> 
 
 
 def snipcut_process(job_id: str):
-    """Main orchestrator: probe → parallel(CFR + transcribe) → analyze → done."""
+    """Main orchestrator with checkpoint resume.
+    Reads DB state to skip completed steps — if CFR + transcript already exist
+    from a previous run that errored later, jumps straight to analysis."""
     import concurrent.futures
 
     conn = get_db()
     try:
         job = row_to_dict(conn.execute(
-            "SELECT id, input_path FROM snipcut_jobs WHERE id = ?", (job_id,)
+            "SELECT * FROM snipcut_jobs WHERE id = ?", (job_id,)
         ).fetchone())
     finally:
         conn.close()
@@ -1708,82 +1710,107 @@ def snipcut_process(job_id: str):
     audio_path = str(APP_DIR / f"snipcut_audio_{job_id}.wav")
 
     try:
-        # Step 1: probe
-        _snipcut_update(job_id, status="probing")
-        info = snipcut_probe(input_path)
-        _snipcut_update(job_id,
-                        duration_seconds=info["duration"],
-                        is_vfr=1 if info["is_vfr"] else 0,
-                        width=info["width"],
-                        height=info["height"])
+        # ── Checkpoint: probe ──
+        has_probe = job["duration_seconds"] and job["duration_seconds"] > 0
+        if has_probe:
+            info = {"duration": job["duration_seconds"], "is_vfr": bool(job["is_vfr"]),
+                    "width": job["width"], "height": job["height"]}
+            print(f"  SnipCut: resuming — probe data exists ({info['duration']:.0f}s)")
+        else:
+            _snipcut_update(job_id, status="probing")
+            info = snipcut_probe(input_path)
+            _snipcut_update(job_id, duration_seconds=info["duration"],
+                            is_vfr=1 if info["is_vfr"] else 0,
+                            width=info["width"], height=info["height"])
 
-        # Check if CFR output already exists
-        if os.path.exists(cfr_output):
-            raise RuntimeError(f"Output already exists: {Path(cfr_output).name}. Delete it first.")
+        # ── Checkpoint: CFR + transcript ──
+        has_cfr = job["cfr_output_path"] and os.path.exists(job["cfr_output_path"])
+        has_transcript = job["transcript_json"] and len(job["transcript_json"]) > 10
 
-        # Step 2: parallel CFR + audio extract + transcribe
-        _snipcut_update(job_id, status="processing")
+        if has_cfr and has_transcript:
+            cfr_output = job["cfr_output_path"]
+            words = json.loads(job["transcript_json"])
+            print(f"  SnipCut: resuming — CFR + transcript exist ({len(words)} words)")
+        else:
+            # Need to run at least one of CFR or transcribe
+            _snipcut_update(job_id, status="processing")
 
-        def cfr_task():
-            return snipcut_convert_cfr(input_path, cfr_output, job_id)
+            if has_cfr:
+                cfr_output = job["cfr_output_path"]
+                print(f"  SnipCut: resuming — CFR exists, only transcribing")
+            elif os.path.exists(cfr_output):
+                # CFR file exists on disk but wasn't recorded in DB
+                _snipcut_update(job_id, cfr_output_path=cfr_output, cfr_progress=100.0)
+                has_cfr = True
+                print(f"  SnipCut: found existing CFR file, skipping conversion")
 
-        def transcribe_task():
-            snipcut_extract_audio(input_path, audio_path)
-            words = snipcut_transcribe(audio_path, job_id, info["duration"])
-            return words
+            def cfr_task():
+                return snipcut_convert_cfr(input_path, cfr_output, job_id)
 
-        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
-            cfr_future = pool.submit(cfr_task)
-            transcribe_future = pool.submit(transcribe_task)
-            cfr_future.result()
-            words = transcribe_future.result()
+            def transcribe_task():
+                snipcut_extract_audio(input_path, audio_path)
+                return snipcut_transcribe(audio_path, job_id, info["duration"])
 
-        # Clean up extracted audio
-        if os.path.exists(audio_path):
-            try:
-                os.remove(audio_path)
-            except OSError:
-                pass
+            with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+                futures = {}
+                if not has_cfr:
+                    futures["cfr"] = pool.submit(cfr_task)
+                if not has_transcript:
+                    futures["tx"] = pool.submit(transcribe_task)
 
-        # Store transcript
-        _snipcut_update(job_id, transcript_json=json.dumps(words))
+                if "cfr" in futures:
+                    futures["cfr"].result()
+                if "tx" in futures:
+                    words = futures["tx"].result()
+                elif has_transcript:
+                    words = json.loads(job["transcript_json"])
 
-        # Step 3: silence detection
-        silence_gaps = snipcut_detect_silence(words, threshold=2.5)
-        _snipcut_update(job_id, silence_gaps_json=json.dumps(silence_gaps))
+            # Clean up audio
+            if os.path.exists(audio_path):
+                try: os.remove(audio_path)
+                except OSError: pass
 
-        # Step 4: Claude analysis
-        _snipcut_update(job_id, status="analyzing")
-        api_key = load_config().get("api_key", "")
-        result = snipcut_analyze(words, api_key)
+            _snipcut_update(job_id, transcript_json=json.dumps(words))
 
-        ai_cuts = result.get("cuts", [])
-        _snipcut_update(job_id,
-                        cuts_json=json.dumps(ai_cuts),
-                        analysis_reasoning=result.get("reasoning", ""))
+        # ── Checkpoint: silence gaps ──
+        has_silence = job["silence_gaps_json"] and len(job["silence_gaps_json"]) > 2
+        if has_silence:
+            silence_gaps = json.loads(job["silence_gaps_json"])
+            print(f"  SnipCut: resuming — silence gaps exist ({len(silence_gaps)} gaps)")
+        else:
+            silence_gaps = snipcut_detect_silence(words, threshold=2.5)
+            _snipcut_update(job_id, silence_gaps_json=json.dumps(silence_gaps))
 
-        # Step 5: EDL generation — merge AI cuts + silence gaps, compute keeps, write EDL
+        # ── Checkpoint: Claude analysis ──
+        has_cuts = job["cuts_json"] and len(job["cuts_json"]) > 2
+        if has_cuts:
+            ai_cuts = json.loads(job["cuts_json"])
+            print(f"  SnipCut: resuming — AI cuts exist ({len(ai_cuts)} cuts)")
+        else:
+            _snipcut_update(job_id, status="analyzing")
+            api_key = load_config().get("api_key", "")
+            result = snipcut_analyze(words, api_key)
+            ai_cuts = result.get("cuts", [])
+            _snipcut_update(job_id, cuts_json=json.dumps(ai_cuts),
+                            analysis_reasoning=result.get("reasoning", ""))
+
+        # ── EDL + clean transcript (always regenerate — fast) ──
         _snipcut_update(job_id, status="generating_edl")
         merged_cuts = snipcut_merge_cuts(ai_cuts, silence_gaps)
         keeps = snipcut_compute_keeps(merged_cuts, info["duration"])
-        # EDL + clean transcript go next to the CFR file
         edl_path = str(Path(cfr_output).with_suffix(".edl"))
         title = Path(input_path).stem
         snipcut_generate_edl(keeps, edl_path, title)
 
-        # Step 6: clean transcript — full transcript with cut words removed
         transcript_path = str(Path(input_path).with_name(f"{title}_transcript.txt"))
         snipcut_generate_clean_transcript(words, merged_cuts, transcript_path)
 
         _snipcut_update(job_id, edl_path=edl_path, transcript_path=transcript_path, status="done")
 
     except Exception as e:
-        # Clean up partial output
         if os.path.exists(audio_path):
-            try:
-                os.remove(audio_path)
-            except OSError:
-                pass
+            try: os.remove(audio_path)
+            except OSError: pass
         _snipcut_update(job_id, status="error", error_text=str(e)[:400])
 
 
@@ -2442,6 +2469,24 @@ def api_snipcut_list():
     finally:
         conn.close()
     return jsonify({"jobs": rows})
+
+
+@app.route("/api/snipcut/jobs/<job_id>/retry", methods=["POST"])
+def api_snipcut_retry(job_id):
+    """Resume a failed job from its last checkpoint."""
+    conn = get_db()
+    try:
+        job = row_to_dict(conn.execute("SELECT id, status FROM snipcut_jobs WHERE id = ?", (job_id,)).fetchone())
+    finally:
+        conn.close()
+    if not job:
+        return jsonify({"error": "Job not found"}), 404
+    if job["status"] not in ("error", "done"):
+        return jsonify({"error": "Job is still running"}), 400
+    # Clear error, keep all checkpointed data (cfr, transcript, silence, etc)
+    _snipcut_update(job_id, status="queued", error_text="")
+    threading.Thread(target=snipcut_process, args=(job_id,), daemon=True).start()
+    return jsonify({"ok": True, "message": "Resuming from last checkpoint"})
 
 
 @app.route("/api/snipcut/jobs/<job_id>", methods=["DELETE"])

@@ -2784,11 +2784,21 @@ function renderSnipcutJobCard(j) {
       <div style="display:flex;gap:6px;align-items:center;flex-shrink:0;">
         ${vfrBadge}
         ${statusBadge}
+        ${j.status === 'error' ? `<button class="btn-ghost btn-sm" onclick="snipcutRetry('${j.id}')" style="font-size:10px;padding:3px 10px;">Retry</button>` : ''}
         <button class="delete-btn" onclick="snipcutDelete('${j.id}')" title="Delete job">&#10005;</button>
       </div>
     </div>
     ${body}
   </div>`;
+}
+
+async function snipcutRetry(jobId) {
+  const r = await fetch(`/api/snipcut/jobs/${jobId}/retry`, { method: 'POST' });
+  const d = await r.json();
+  if (d.error) { toast(d.error); return; }
+  toast('Resuming from checkpoint…');
+  startSnipcutPolling();
+  loadSnipcutJobs();
 }
 
 async function snipcutDelete(jobId) {
