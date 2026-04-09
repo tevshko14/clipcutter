@@ -2489,6 +2489,21 @@ def api_snipcut_retry(job_id):
     return jsonify({"ok": True, "message": "Resuming from last checkpoint"})
 
 
+@app.route("/api/snipcut/jobs/<job_id>/cleanup", methods=["POST"])
+def api_snipcut_cleanup(job_id):
+    """Clear large data (transcript, silence gaps) from DB but keep the job record + outputs."""
+    conn = get_db()
+    try:
+        conn.execute(
+            "UPDATE snipcut_jobs SET transcript_json = '', silence_gaps_json = '' WHERE id = ?",
+            (job_id,)
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    return jsonify({"ok": True})
+
+
 @app.route("/api/snipcut/jobs/<job_id>", methods=["DELETE"])
 def api_snipcut_delete(job_id):
     conn = get_db()

@@ -2800,6 +2800,7 @@ function renderSnipcutJobCard(j) {
         ${vfrBadge}
         ${statusBadge}
         ${j.status === 'error' ? `<button class="btn-ghost btn-sm" onclick="snipcutRetry('${j.id}')" style="font-size:10px;padding:3px 10px;">Retry</button>` : ''}
+        ${j.status === 'done' ? `<button class="btn-ghost btn-sm" onclick="snipcutCleanup('${j.id}')" style="font-size:10px;padding:3px 10px;" title="Clear transcript data from DB to save space">Clean DB</button>` : ''}
         <button class="delete-btn" onclick="snipcutDelete('${j.id}')" title="Delete job">&#10005;</button>
       </div>
     </div>
@@ -2813,6 +2814,12 @@ async function snipcutRetry(jobId) {
   if (d.error) { toast(d.error); return; }
   toast('Resuming from checkpoint…');
   startSnipcutPolling();
+  loadSnipcutJobs();
+}
+
+async function snipcutCleanup(jobId) {
+  await fetch(`/api/snipcut/jobs/${jobId}/cleanup`, { method: 'POST' });
+  toast('Transcript data cleared from DB');
   loadSnipcutJobs();
 }
 
