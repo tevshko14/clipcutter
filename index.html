@@ -1360,8 +1360,11 @@
     <div id="snipcutContent">
       <div id="snipcutDropZone" class="drop-zone">
         <div class="drop-zone-icon">&#127916;</div>
-        <div class="drop-zone-title">Drop an MP4 here</div>
+        <div class="drop-zone-title">Choose an MP4 to process</div>
         <div class="drop-zone-sub">StreamYard recording → CFR conversion + AI cut detection</div>
+        <button class="btn-primary" onclick="snipcutPickFile()" style="margin-top:16px;padding:12px 32px;font-size:14px;">
+          &#128193; Browse for File
+        </button>
         <div class="drop-zone-hint">
           Or paste path: <input type="text" id="snipcutPathInput" placeholder="/path/to/video.mp4" style="font-family:var(--mono);font-size:11px;width:280px;padding:6px 10px;margin-top:8px;">
           <button class="btn-ghost btn-sm" onclick="snipcutSubmitPath()" style="margin-left:6px;">Start</button>
@@ -2651,6 +2654,18 @@ function snipcutStartFromPath(path) {
     loadSnipcutJobs();
     startSnipcutPolling();
   }).catch(() => toast('Failed to start job'));
+}
+
+async function snipcutPickFile() {
+  try {
+    const r = await fetch('/api/snipcut/pick-file', { method: 'POST' });
+    const d = await r.json();
+    if (d.error) { toast(d.error); return; }
+    if (d.cancelled || !d.path) return;
+    snipcutStartFromPath(d.path);
+  } catch(e) {
+    toast('File picker failed');
+  }
 }
 
 function snipcutSubmitPath() {

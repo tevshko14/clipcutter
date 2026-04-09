@@ -2500,6 +2500,25 @@ def api_snipcut_delete(job_id):
     return jsonify({"ok": True})
 
 
+@app.route("/api/snipcut/pick-file", methods=["POST"])
+def api_snipcut_pick_file():
+    """Open a native file dialog and return the selected path."""
+    # pywebview windows list
+    try:
+        windows = webview.windows
+        if windows:
+            result = windows[0].create_file_dialog(
+                webview.OPEN_DIALOG,
+                file_types=("MP4 Video (*.mp4)",),
+            )
+            if result and len(result) > 0:
+                return jsonify({"path": result[0]})
+            return jsonify({"path": None, "cancelled": True})
+        return jsonify({"error": "No window available"}), 500
+    except Exception as e:
+        return jsonify({"error": str(e)[:200]}), 500
+
+
 @app.route("/api/snipcut/pending-file")
 def api_snipcut_pending_file():
     """Return the file path passed via 'Open With ClipCutter' if not yet consumed."""
