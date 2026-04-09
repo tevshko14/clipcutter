@@ -1375,62 +1375,107 @@ def snipcut_detect_silence(words: list, threshold: float = 2.5) -> list:
     return gaps
 
 
-def snipcut_analyze(words: list, api_key: str) -> dict:
-    """Call Claude Sonnet to identify filler words and repeated takes."""
-    if not api_key or not words:
-        return {"cuts": [], "reasoning": "No API key or transcript" if not api_key else "Empty transcript"}
-
-    # Format as [time] word lines, chunking for long transcripts
+def _snipcut_analyze_chunk(words_chunk: list, api_key: str) -> list:
+    """Analyze one chunk of words (~10 min) with Claude. Returns list of cuts."""
     def fmt(w):
         m = int(w["start"] // 60)
         s = w["start"] % 60
         return f"[{m}:{s:05.2f}] {w['word']}"
 
-    transcript_text = "\n".join(fmt(w) for w in words)
-    # Truncate to ~40k chars (Sonnet handles ~200k tokens, but we want speed)
-    if len(transcript_text) > 40000:
-        transcript_text = transcript_text[:40000] + "\n[... truncated for length ...]"
+    transcript_text = "\n".join(fmt(w) for w in words_chunk)
 
     prompt = f"""You are a video editor analyzing a transcript with word-level timestamps. The speaker is recording a talking-head video about finance/stocks.
 
-Your job: identify segments to CUT from the video.
+Identify segments to CUT from the video.
 
 CUT these:
-1. **Filler words used as fillers**: um, uh, ah, like (when used as filler, NOT as comparison), you know, I mean, sort of, kind of, basically (as filler), actually (as filler), right (as filler tag), so (at the start of a sentence, used as a filler)
-2. **Repeated takes**: when the speaker starts a thought, pauses/stumbles/restarts, then says the thought again. ALWAYS keep the SECOND attempt and CUT the FIRST. The boundary is usually marked by a pause, filler word, or abrupt restart.
+1. **Filler words**: um, uh, ah, like (as filler), you know, I mean, sort of, kind of, basically, actually, right (as filler tag), so (sentence-starter filler)
+2. **Repeated takes**: speaker starts a thought, stumbles/restarts. ALWAYS keep the SECOND attempt, CUT the FIRST.
 
-Do NOT cut:
-- Intentional pauses for emphasis
-- "like" used as comparison ("it looks like...", "companies like Apple")
-- Rhetorical questions
-- Natural speech rhythm
+Do NOT cut: intentional pauses, "like" as comparison, rhetorical questions, natural speech rhythm.
 
-TRANSCRIPT (format: [MM:SS.SS] word):
+TRANSCRIPT:
 {transcript_text}
 
-Respond in JSON only. For each cut, give exact start/end times matching the transcript timestamps:
-{{
-  "cuts": [
-    {{"start": 12.45, "end": 12.90, "reason": "filler", "content": "um"}},
-    {{"start": 45.20, "end": 52.80, "reason": "repeated_take", "content": "First attempt of: So today we're going to talk about..."}}
-  ],
-  "reasoning": "Brief summary of what you found"
-}}
+Respond with a JSON array of cuts ONLY — no wrapper object, just the array:
+[
+  {{"start": 12.45, "end": 12.90, "reason": "filler", "content": "um"}},
+  {{"start": 45.20, "end": 52.80, "reason": "repeated_take", "content": "First attempt of: ..."}}
+]
 
-If nothing needs cutting, return {{"cuts": [], "reasoning": "Clean delivery"}}."""
+If nothing needs cutting, return: []"""
 
     import anthropic
     text = anthropic.Anthropic(api_key=api_key).messages.create(
         model="claude-sonnet-4-20250514",
-        max_tokens=8000,
+        max_tokens=16000,
         messages=[{"role": "user", "content": prompt}],
     ).content[0].text.strip()
 
-    # Extract JSON
-    match = re.search(r'\{[\s\S]*\}', text)
+    # Extract JSON array
+    match = re.search(r'\[[\s\S]*\]', text)
     if match:
         text = match.group(0)
-    return json.loads(text)
+
+    try:
+        result = json.loads(text)
+        return result if isinstance(result, list) else result.get("cuts", [])
+    except json.JSONDecodeError:
+        # Try to fix common issues: trailing comma before ]
+        cleaned = re.sub(r',\s*\]', ']', text)
+        cleaned = re.sub(r',\s*\}', '}', cleaned)
+        try:
+            result = json.loads(cleaned)
+            return result if isinstance(result, list) else result.get("cuts", [])
+        except json.JSONDecodeError:
+            print(f"  SnipCut: JSON parse failed for chunk. Response: {text[:200]}")
+            return []
+
+
+def snipcut_analyze(words: list, api_key: str) -> dict:
+    """Analyze transcript in ~10-minute chunks, merge results."""
+    if not api_key or not words:
+        return {"cuts": [], "reasoning": "No API key or transcript" if not api_key else "Empty transcript"}
+
+    # Chunk words into ~10 min segments with 30s overlap
+    chunk_duration = 600  # 10 minutes
+    overlap = 30  # seconds
+    chunks = []
+    chunk_start_idx = 0
+
+    while chunk_start_idx < len(words):
+        chunk_end_time = words[chunk_start_idx]["start"] + chunk_duration
+        chunk_end_idx = chunk_start_idx
+        while chunk_end_idx < len(words) and words[chunk_end_idx]["start"] < chunk_end_time:
+            chunk_end_idx += 1
+        # Add overlap for context
+        overlap_end = chunk_end_time + overlap
+        actual_end_idx = chunk_end_idx
+        while actual_end_idx < len(words) and words[actual_end_idx]["start"] < overlap_end:
+            actual_end_idx += 1
+        chunks.append(words[chunk_start_idx:actual_end_idx])
+        chunk_start_idx = chunk_end_idx  # next chunk starts where this one ended (not overlap)
+
+    all_cuts = []
+    for i, chunk in enumerate(chunks):
+        print(f"  SnipCut: analyzing chunk {i+1}/{len(chunks)} ({len(chunk)} words, {chunk[0]['start']:.0f}s-{chunk[-1]['end']:.0f}s)")
+        cuts = _snipcut_analyze_chunk(chunk, api_key)
+        all_cuts.extend(cuts)
+
+    # Deduplicate cuts that might overlap from chunk boundaries
+    seen = set()
+    unique = []
+    for c in all_cuts:
+        try:
+            key = (round(float(c["start"]), 1), round(float(c["end"]), 1))
+            if key not in seen:
+                seen.add(key)
+                unique.append(c)
+        except (KeyError, ValueError, TypeError):
+            continue
+
+    reasoning = f"Analyzed {len(chunks)} chunk{'s' if len(chunks) > 1 else ''}, found {len(unique)} cuts"
+    return {"cuts": unique, "reasoning": reasoning}
 
 
 def snipcut_seconds_to_tc(seconds: float, fps: int = 30) -> str:
