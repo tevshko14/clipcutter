@@ -187,6 +187,9 @@ def init_db():
         "ALTER TABLE snipcut_jobs ADD COLUMN transcript_path TEXT DEFAULT ''",
         "ALTER TABLE snipcut_jobs ADD COLUMN output_fps INTEGER DEFAULT 30",
         "ALTER TABLE snipcut_jobs ADD COLUMN markers_path TEXT DEFAULT ''",
+        "ALTER TABLE snipcut_jobs ADD COLUMN mode TEXT DEFAULT 'full'",
+        "ALTER TABLE snipcut_jobs ADD COLUMN refined_edl_path TEXT DEFAULT ''",
+        "ALTER TABLE snipcut_jobs ADD COLUMN refined_markers_path TEXT DEFAULT ''",
     ]:
         try:
             conn.execute(migration)
@@ -216,6 +219,20 @@ def init_db():
             analysis_reasoning TEXT DEFAULT '',
             created_at TEXT DEFAULT CURRENT_TIMESTAMP
         );
+
+        CREATE TABLE IF NOT EXISTS snipcut_markers (
+            id TEXT PRIMARY KEY,
+            job_id TEXT NOT NULL,
+            sort_order INTEGER NOT NULL,
+            start_seconds REAL NOT NULL,
+            end_seconds REAL NOT NULL,
+            reason TEXT NOT NULL,
+            content TEXT DEFAULT '',
+            decision TEXT DEFAULT 'pending',
+            FOREIGN KEY (job_id) REFERENCES snipcut_jobs(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS idx_snipcut_markers_job
+            ON snipcut_markers(job_id, sort_order);
     """)
     conn.commit()
 
@@ -1379,6 +1396,48 @@ def snipcut_detect_silence(words: list, threshold: float = 2.5) -> list:
     return gaps
 
 
+def snipcut_detect_silence_ffmpeg(audio_path: str, threshold_db: int = -35,
+                                   min_duration: float = 2.5) -> list:
+    """Run ffmpeg's silencedetect filter and return gaps as [{start, end, duration}].
+
+    Used by silence-only mode to skip Whisper transcription entirely —
+    much faster for 'just kill dead air' workflows.
+    """
+    cmd = [
+        "ffmpeg", "-i", audio_path,
+        "-af", f"silencedetect=n={threshold_db}dB:d={min_duration}",
+        "-f", "null", "-",
+    ]
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+    # silencedetect writes to stderr
+    stderr = result.stderr
+
+    gaps = []
+    current_start = None
+    for line in stderr.splitlines():
+        line = line.strip()
+        if "silence_start:" in line:
+            try:
+                current_start = float(line.split("silence_start:")[1].strip().split()[0])
+            except (ValueError, IndexError):
+                current_start = None
+        elif "silence_end:" in line and current_start is not None:
+            try:
+                end_part = line.split("silence_end:")[1].strip().split("|")[0].strip()
+                end = float(end_part.split()[0])
+                duration = end - current_start
+                if duration >= min_duration:
+                    gaps.append({
+                        "start": round(current_start, 2),
+                        "end": round(end, 2),
+                        "duration": round(duration, 2),
+                    })
+            except (ValueError, IndexError):
+                pass
+            current_start = None
+    return gaps
+
+
 def _snipcut_analyze_chunk(words_chunk: list, api_key: str) -> list:
     """Analyze one chunk of words (~10 min) with Claude. Returns list of cuts."""
     def fmt(w):
@@ -1494,6 +1553,75 @@ def snipcut_seconds_to_tc(seconds: float, fps: int = 30) -> str:
     return f"{hh:02d}:{mm:02d}:{ss:02d}:{ff:02d}"
 
 
+def snipcut_snap_cuts_to_words(cuts: list, words: list, buffer_seconds: float = 0.05) -> list:
+    """Snap each cut's start/end to actual Whisper word boundaries.
+
+    Claude's timestamps are drawn from Whisper word timings but can drift
+    ±100-200ms, occasionally slicing mid-word. This function:
+      1. Finds all words whose midpoint falls inside the cut range.
+      2. Snaps cut.start -> first matched word.start, cut.end -> last word.end.
+      3. Adds a small breathing buffer (default 50ms) without eating adjacent words.
+      4. Drops cuts that become invalid (start >= end).
+
+    Cuts with no matching words (e.g. pure silence gaps) are left untouched.
+    """
+    if not words or not cuts:
+        return cuts
+
+    # Pre-sort words by start time for binary search
+    sorted_words = sorted(words, key=lambda w: w.get("start", 0))
+    starts = [w["start"] for w in sorted_words]
+
+    import bisect
+    snapped = []
+    for c in cuts:
+        try:
+            c_start = float(c["start"])
+            c_end = float(c["end"])
+        except (KeyError, ValueError, TypeError):
+            continue
+        if c_end <= c_start:
+            continue
+
+        # Find words whose MIDPOINT falls inside [c_start, c_end]
+        matched = []
+        # Narrow the search: words whose start >= c_start - max_word_len, up to c_end
+        lo = bisect.bisect_left(starts, c_start - 2.0)  # widen a bit for safety
+        for i in range(lo, len(sorted_words)):
+            w = sorted_words[i]
+            if w["start"] > c_end:
+                break
+            mid = (w["start"] + w["end"]) / 2
+            if c_start <= mid <= c_end:
+                matched.append((i, w))
+
+        if matched:
+            first_idx, first_word = matched[0]
+            last_idx, last_word = matched[-1]
+            new_start = first_word["start"]
+            new_end = last_word["end"]
+
+            # Apply buffer without eating adjacent words
+            prev_word = sorted_words[first_idx - 1] if first_idx > 0 else None
+            next_word = sorted_words[last_idx + 1] if last_idx + 1 < len(sorted_words) else None
+            new_start = max(new_start - buffer_seconds,
+                            (prev_word["end"] + buffer_seconds) if prev_word else 0.0)
+            new_end = new_end + buffer_seconds
+            if next_word:
+                new_end = min(new_end, next_word["start"] - buffer_seconds)
+
+            if new_end > new_start:
+                c = dict(c)  # don't mutate original
+                c["start"] = round(new_start, 3)
+                c["end"] = round(new_end, 3)
+                snapped.append(c)
+        else:
+            # No matched words — keep as-is (likely a silence gap that was already clean)
+            snapped.append(c)
+
+    return snapped
+
+
 def snipcut_merge_cuts(ai_cuts: list, silence_gaps: list, min_merge_gap: float = 0.2) -> list:
     """Merge AI cuts + silence gaps into a unified sorted cut list.
     Adjacent/overlapping cuts are consolidated."""
@@ -1585,6 +1713,27 @@ def snipcut_generate_clean_transcript(words: list, cuts: list, output_path: str)
     Path(output_path).write_text("\n".join(lines) + "\n")
 
 
+SNIPCUT_REASON_EMOJI = {
+    "silence": "🔵",
+    "filler": "🟡",
+    "repeated_take": "🔴",
+    "merged": "🟣",
+    "cut": "⚪",
+}
+
+SNIPCUT_REASON_COLOR = {
+    "silence": "#3b82f6",
+    "filler": "#eab308",
+    "repeated_take": "#ef4444",
+    "merged": "#a855f7",
+    "cut": "#7a7a88",
+}
+
+
+def snipcut_reason_emoji(reason: str) -> str:
+    return SNIPCUT_REASON_EMOJI.get(reason or "cut", "⚪")
+
+
 def snipcut_generate_markers_txt(merged_cuts: list, output_path: str, title: str,
                                   duration: float, fps: int = 30):
     """Human-readable marker list — timecodes + reasons + content snippets.
@@ -1600,12 +1749,15 @@ def snipcut_generate_markers_txt(merged_cuts: list, output_path: str, title: str
         f"SnipCut Markers — {title}",
         f"Video: {fmt_mm_ss(duration)} @ {fps}fps · {len(merged_cuts)} markers · {fmt_mm_ss(total_flagged)} flagged",
         "",
+        "Legend:  🔵 Silence   🟡 Filler   🔴 Repeated take   🟣 Merged",
+        "",
         "Review each marker in DaVinci Resolve — jump to the timecode and cut manually if needed.",
         "",
     ]
     for c in merged_cuts:
         tc = snipcut_seconds_to_tc(c["start"], fps)
         reason_raw = (c.get("reason") or "cut")
+        emoji = snipcut_reason_emoji(reason_raw)
         if reason_raw == "silence":
             gap = c["end"] - c["start"]
             reason = f"SILENCE {gap:.1f}s"
@@ -1614,7 +1766,7 @@ def snipcut_generate_markers_txt(merged_cuts: list, output_path: str, title: str
             reason = reason_raw.upper().replace("_", " ")
             content_raw = (c.get("content") or "").strip()
             content = f'"{content_raw[:100]}"' if content_raw else ""
-        lines.append(f" {tc}  {reason:<16} {content}")
+        lines.append(f" {emoji} {tc}  {reason:<16} {content}")
     Path(output_path).write_text("\n".join(lines) + "\n")
 
 
@@ -1725,6 +1877,33 @@ def snipcut_open_in_resolve(cfr_path: str, edl_path: str, project_name: str) -> 
         return {"error": f"Resolve API error: {str(e)[:200]}"}
 
 
+def snipcut_populate_markers_table(job_id: str, merged_cuts: list):
+    """Insert one row into snipcut_markers per merged cut, all with decision='pending'.
+    Clears any existing rows for this job first so retries produce a clean set."""
+    conn = get_db()
+    try:
+        conn.execute("DELETE FROM snipcut_markers WHERE job_id = ?", (job_id,))
+        for i, c in enumerate(merged_cuts):
+            try:
+                start = float(c.get("start", 0))
+                end = float(c.get("end", 0))
+            except (TypeError, ValueError):
+                continue
+            if end <= start:
+                continue
+            marker_id = uuid.uuid4().hex[:12]
+            reason = (c.get("reason") or "cut").strip() or "cut"
+            content = (c.get("content") or "").strip()
+            conn.execute(
+                "INSERT INTO snipcut_markers (id, job_id, sort_order, start_seconds, end_seconds, "
+                "reason, content, decision) VALUES (?, ?, ?, ?, ?, ?, ?, 'pending')",
+                (marker_id, job_id, i, round(start, 3), round(end, 3), reason, content[:500])
+            )
+        conn.commit()
+    finally:
+        conn.close()
+
+
 def snipcut_process(job_id: str):
     """Main orchestrator with checkpoint resume.
     Reads DB state to skip completed steps — if CFR + transcript already exist
@@ -1745,6 +1924,7 @@ def snipcut_process(job_id: str):
     input_path = job["input_path"]
     cfr_output = str(Path(input_path).with_name(f"{Path(input_path).stem}_cfr{Path(input_path).suffix}"))
     audio_path = str(APP_DIR / f"snipcut_audio_{job_id}.wav")
+    mode = (job.get("mode") or "full").strip() or "full"
 
     try:
         # ── Checkpoint: probe ──
@@ -1759,6 +1939,75 @@ def snipcut_process(job_id: str):
             _snipcut_update(job_id, duration_seconds=info["duration"],
                             is_vfr=1 if info["is_vfr"] else 0,
                             width=info["width"], height=info["height"])
+
+        # ── Silence-only fast mode: skip Whisper + Claude entirely ──
+        if mode == "silence_only":
+            has_cfr = job["cfr_output_path"] and os.path.exists(job["cfr_output_path"])
+            output_fps = job.get("output_fps") or 30
+
+            if not has_cfr:
+                _snipcut_update(job_id, status="processing")
+                cfr_output, output_fps = snipcut_convert_cfr(input_path, cfr_output, job_id)
+                _snipcut_update(job_id, output_fps=output_fps)
+            else:
+                cfr_output = job["cfr_output_path"]
+                if not job.get("output_fps"):
+                    try:
+                        cfr_info = snipcut_probe(cfr_output)
+                        output_fps = round(cfr_info["fps"]) or 30
+                        _snipcut_update(job_id, output_fps=output_fps)
+                    except Exception:
+                        pass
+
+            # Extract audio + run ffmpeg silencedetect. Skip transcription entirely.
+            has_silence = job["silence_gaps_json"] and len(job["silence_gaps_json"]) > 2
+            if has_silence:
+                silence_gaps = json.loads(job["silence_gaps_json"])
+                print(f"  SnipCut (silence-only): resuming — silence gaps exist ({len(silence_gaps)} gaps)")
+            else:
+                _snipcut_update(job_id, status="detecting_silence", transcribe_progress=50.0)
+                snipcut_extract_audio(input_path, audio_path)
+                silence_gaps = snipcut_detect_silence_ffmpeg(audio_path, threshold_db=-35, min_duration=2.5)
+                _snipcut_update(job_id, silence_gaps_json=json.dumps(silence_gaps),
+                                transcribe_progress=100.0)
+                if os.path.exists(audio_path):
+                    try: os.remove(audio_path)
+                    except OSError: pass
+
+            words = []
+            # No AI cuts — silence gaps provide all the marker data.
+            ai_cuts = []
+            _snipcut_update(job_id, cuts_json=json.dumps(ai_cuts))
+
+            # Jump straight to EDL + markers generation below.
+            _snipcut_update(job_id, status="generating_edl")
+
+            # Re-probe CFR to confirm fps
+            try:
+                cfr_info = snipcut_probe(cfr_output)
+                actual_fps = round(cfr_info["fps"]) or output_fps
+                if actual_fps != output_fps:
+                    output_fps = actual_fps
+                    _snipcut_update(job_id, output_fps=output_fps)
+            except Exception:
+                pass
+
+            merged_cuts = snipcut_merge_cuts(ai_cuts, silence_gaps)
+            keeps = snipcut_compute_keeps(merged_cuts, info["duration"])
+            edl_path = str(Path(cfr_output).with_suffix(".edl"))
+            title = Path(input_path).stem
+            snipcut_generate_edl(keeps, edl_path, title, fps=output_fps)
+
+            markers_path = str(Path(input_path).with_name(f"{title}_markers.txt"))
+            snipcut_generate_markers_txt(merged_cuts, markers_path, title,
+                                         info["duration"], fps=output_fps)
+
+            # Populate snipcut_markers rows for interactive review
+            snipcut_populate_markers_table(job_id, merged_cuts)
+
+            _snipcut_update(job_id, edl_path=edl_path, transcript_path="",
+                            markers_path=markers_path, status="done")
+            return
 
         # ── Checkpoint: CFR + transcript ──
         has_cfr = job["cfr_output_path"] and os.path.exists(job["cfr_output_path"])
@@ -1849,6 +2098,9 @@ def snipcut_process(job_id: str):
             api_key = load_config().get("api_key", "")
             result = snipcut_analyze(words, api_key)
             ai_cuts = result.get("cuts", [])
+            # Snap cut boundaries to actual Whisper word edges so we never
+            # slice mid-word. Adds a 50ms breathing buffer on each side.
+            ai_cuts = snipcut_snap_cuts_to_words(ai_cuts, words)
             _snipcut_update(job_id, cuts_json=json.dumps(ai_cuts),
                             analysis_reasoning=result.get("reasoning", ""))
 
@@ -1882,6 +2134,9 @@ def snipcut_process(job_id: str):
 
         transcript_path = str(Path(input_path).with_name(f"{title}_transcript.txt"))
         snipcut_generate_clean_transcript(words, merged_cuts, transcript_path)
+
+        # Populate snipcut_markers rows for interactive review (all decision='pending')
+        snipcut_populate_markers_table(job_id, merged_cuts)
 
         _snipcut_update(job_id, edl_path=edl_path, transcript_path=transcript_path,
                         markers_path=markers_path, status="done")
@@ -2496,6 +2751,10 @@ def api_snipcut_create():
     if not input_path.lower().endswith(".mp4"):
         return jsonify({"error": "Only .mp4 files are supported"}), 400
 
+    mode = (data.get("mode") or "full").strip()
+    if mode not in ("full", "silence_only"):
+        mode = "full"
+
     # Check if already processed
     cfr_output = str(Path(input_path).with_name(f"{Path(input_path).stem}_cfr{Path(input_path).suffix}"))
     if os.path.exists(cfr_output):
@@ -2507,8 +2766,8 @@ def api_snipcut_create():
     conn = get_db()
     try:
         conn.execute(
-            "INSERT INTO snipcut_jobs (id, input_path, input_filename, status) VALUES (?, ?, ?, 'queued')",
-            (job_id, input_path, filename)
+            "INSERT INTO snipcut_jobs (id, input_path, input_filename, status, mode) VALUES (?, ?, ?, 'queued', ?)",
+            (job_id, input_path, filename, mode)
         )
         conn.commit()
     finally:
@@ -2542,7 +2801,8 @@ def api_snipcut_list():
         rows = rows_to_list(conn.execute(
             "SELECT id, input_filename, status, error_text, duration_seconds, is_vfr, "
             "cfr_output_path, cfr_progress, transcribe_progress, cuts_json, "
-            "analysis_reasoning, edl_path, resolve_status, transcript_path, output_fps, markers_path, created_at "
+            "analysis_reasoning, edl_path, resolve_status, transcript_path, output_fps, markers_path, "
+            "mode, refined_edl_path, refined_markers_path, created_at "
             "FROM snipcut_jobs ORDER BY created_at DESC LIMIT 20"
         ).fetchall())
     finally:
@@ -2651,6 +2911,145 @@ def api_snipcut_open_resolve(job_id):
 
     threading.Thread(target=run_open, daemon=True).start()
     return jsonify({"ok": True, "message": "Opening in DaVinci Resolve…"})
+
+
+# ---------- SnipCut Interactive Review Routes ----------
+
+@app.route("/api/snipcut/jobs/<job_id>/markers")
+def api_snipcut_markers_list(job_id):
+    """Return all markers for a job, ordered by sort_order."""
+    conn = get_db()
+    try:
+        # Ensure job exists
+        job = conn.execute("SELECT id FROM snipcut_jobs WHERE id = ?", (job_id,)).fetchone()
+        if not job:
+            return jsonify({"error": "Job not found"}), 404
+        rows = rows_to_list(conn.execute(
+            "SELECT id, sort_order, start_seconds, end_seconds, reason, content, decision "
+            "FROM snipcut_markers WHERE job_id = ? ORDER BY sort_order ASC",
+            (job_id,)
+        ).fetchall())
+    finally:
+        conn.close()
+    return jsonify({"markers": rows})
+
+
+@app.route("/api/snipcut/markers/<marker_id>", methods=["PUT"])
+def api_snipcut_marker_update(marker_id):
+    """Update a single marker's decision."""
+    data = request.json or {}
+    decision = (data.get("decision") or "").strip()
+    if decision not in ("pending", "keep", "cut"):
+        return jsonify({"error": "decision must be pending|keep|cut"}), 400
+    conn = get_db()
+    try:
+        cur = conn.execute(
+            "UPDATE snipcut_markers SET decision = ? WHERE id = ?",
+            (decision, marker_id)
+        )
+        conn.commit()
+        if cur.rowcount == 0:
+            return jsonify({"error": "Marker not found"}), 404
+    finally:
+        conn.close()
+    return jsonify({"ok": True})
+
+
+@app.route("/api/snipcut/jobs/<job_id>/markers/bulk", methods=["PUT"])
+def api_snipcut_markers_bulk(job_id):
+    """Apply a list of decision updates in one request."""
+    data = request.json or {}
+    updates = data.get("updates") or []
+    if not isinstance(updates, list):
+        return jsonify({"error": "updates must be a list"}), 400
+    conn = get_db()
+    try:
+        applied = 0
+        for u in updates:
+            mid = u.get("id")
+            decision = u.get("decision")
+            if not mid or decision not in ("pending", "keep", "cut"):
+                continue
+            cur = conn.execute(
+                "UPDATE snipcut_markers SET decision = ? WHERE id = ? AND job_id = ?",
+                (decision, mid, job_id)
+            )
+            applied += cur.rowcount
+        conn.commit()
+    finally:
+        conn.close()
+    return jsonify({"ok": True, "applied": applied})
+
+
+@app.route("/api/snipcut/jobs/<job_id>/export-refined", methods=["POST"])
+def api_snipcut_export_refined(job_id):
+    """Regenerate EDL + markers.txt using only markers where decision='cut'."""
+    conn = get_db()
+    try:
+        job = row_to_dict(conn.execute(
+            "SELECT * FROM snipcut_jobs WHERE id = ?", (job_id,)
+        ).fetchone())
+        if not job:
+            return jsonify({"error": "Job not found"}), 404
+        rows = rows_to_list(conn.execute(
+            "SELECT start_seconds, end_seconds, reason, content "
+            "FROM snipcut_markers WHERE job_id = ? AND decision = 'cut' ORDER BY sort_order ASC",
+            (job_id,)
+        ).fetchall())
+    finally:
+        conn.close()
+
+    if not job.get("cfr_output_path") or not os.path.exists(job["cfr_output_path"]):
+        return jsonify({"error": "CFR output not found"}), 400
+
+    approved_cuts = [
+        {"start": r["start_seconds"], "end": r["end_seconds"],
+         "reason": r["reason"], "content": r["content"] or ""}
+        for r in rows
+    ]
+
+    cfr_output = job["cfr_output_path"]
+    input_path = job["input_path"]
+    title = Path(input_path).stem
+    duration = job.get("duration_seconds") or 0
+    output_fps = job.get("output_fps") or 30
+
+    keeps = snipcut_compute_keeps(approved_cuts, duration)
+    refined_edl_path = str(Path(cfr_output).with_name(f"{title}_refined.edl"))
+    snipcut_generate_edl(keeps, refined_edl_path, f"{title}_refined", fps=output_fps)
+
+    refined_markers_path = str(Path(input_path).with_name(f"{title}_refined_markers.txt"))
+    snipcut_generate_markers_txt(approved_cuts, refined_markers_path, f"{title} (refined)",
+                                  duration, fps=output_fps)
+
+    _snipcut_update(job_id, refined_edl_path=refined_edl_path,
+                    refined_markers_path=refined_markers_path)
+
+    return jsonify({
+        "ok": True,
+        "refined_edl_path": refined_edl_path,
+        "refined_markers_path": refined_markers_path,
+        "approved_count": len(approved_cuts),
+        "kept_segments": len(keeps),
+    })
+
+
+@app.route("/api/snipcut/jobs/<job_id>/video")
+def api_snipcut_video(job_id):
+    """Stream the CFR video file for inline preview (supports byte-range)."""
+    conn = get_db()
+    try:
+        job = row_to_dict(conn.execute(
+            "SELECT cfr_output_path FROM snipcut_jobs WHERE id = ?", (job_id,)
+        ).fetchone())
+    finally:
+        conn.close()
+    if not job or not job.get("cfr_output_path"):
+        return jsonify({"error": "Job not found"}), 404
+    video_path = job["cfr_output_path"]
+    if not os.path.exists(video_path):
+        return jsonify({"error": "Video file missing"}), 404
+    return send_file(video_path, mimetype="video/mp4", conditional=True)
 
 
 # ---------- Entry Point ----------

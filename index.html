@@ -1189,10 +1189,127 @@
     background: var(--surface-3); color: var(--text-dimmer);
     min-width: 60px; text-align: center;
   }
-  .snipcut-cut-reason.filler { background: var(--yellow-dim); color: var(--yellow); }
-  .snipcut-cut-reason.repeated_take { background: var(--blue-dim); color: var(--blue); }
-  .snipcut-cut-reason.silence { background: var(--surface-3); color: var(--text-dimmer); }
+  .snipcut-cut-reason.filler { background: rgba(234,179,8,0.18); color: #eab308; }
+  .snipcut-cut-reason.repeated_take { background: rgba(239,68,68,0.18); color: #ef4444; }
+  .snipcut-cut-reason.silence { background: rgba(59,130,246,0.18); color: #3b82f6; }
+  .snipcut-cut-reason.merged { background: rgba(168,85,247,0.18); color: #a855f7; }
   .snipcut-cut-content { flex: 1; color: var(--text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+  /* Color-coded left border per marker reason */
+  .snipcut-marker-filler        { border-left: 3px solid #eab308; }
+  .snipcut-marker-repeated_take { border-left: 3px solid #ef4444; }
+  .snipcut-marker-silence       { border-left: 3px solid #3b82f6; }
+  .snipcut-marker-merged        { border-left: 3px solid #a855f7; }
+  .snipcut-marker-cut           { border-left: 3px solid #7a7a88; }
+
+  /* ── SnipCut mode toggle ── */
+  .snipcut-mode-btn {
+    font-family: var(--mono); font-size: 10px;
+    padding: 5px 12px; border-radius: 4px;
+    background: var(--surface-2); color: var(--text-dim);
+    border: 1px solid var(--border); cursor: pointer;
+    text-transform: uppercase; letter-spacing: 0.4px;
+  }
+  .snipcut-mode-btn:hover { color: var(--text); border-color: var(--text-dim); }
+  .snipcut-mode-btn.active {
+    background: var(--accent); color: #fff; border-color: var(--accent);
+  }
+
+  /* ── SnipCut Review View (full-screen overlay) ── */
+  .snipcut-review-view {
+    position: fixed; inset: 0;
+    background: var(--bg); z-index: 1000;
+    display: flex; flex-direction: column;
+    padding: 16px 20px 20px 20px;
+    overflow: hidden;
+  }
+  .snipcut-review-header {
+    display: flex; align-items: center; gap: 12px;
+    padding-bottom: 12px; border-bottom: 1px solid var(--border);
+    flex-shrink: 0;
+  }
+  .snipcut-review-title {
+    flex: 1; font-size: 13px; font-weight: 500; color: var(--text);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .snipcut-review-counter {
+    font-family: var(--mono); font-size: 11px; color: var(--text-dim);
+  }
+  .snipcut-review-body {
+    display: grid; grid-template-columns: 1.3fr 1fr;
+    gap: 14px; padding: 14px 0;
+    flex-shrink: 0;
+  }
+  .snipcut-review-left video {
+    width: 100%; max-height: 300px;
+    background: #000; border-radius: 6px;
+    border: 1px solid var(--border);
+  }
+  .snipcut-review-hint {
+    font-size: 10px; color: var(--text-dimmer);
+    font-family: var(--mono); margin-top: 6px;
+  }
+  .snipcut-review-right {
+    display: flex; flex-direction: column; gap: 10px;
+  }
+  .snipcut-review-detail {
+    flex: 1; background: var(--surface-2); border-radius: 6px;
+    padding: 12px; border: 1px solid var(--border);
+    min-height: 120px;
+  }
+  .snipcut-review-detail .tc {
+    font-family: var(--mono); font-size: 12px; color: var(--text-dim);
+    margin-bottom: 8px;
+  }
+  .snipcut-review-detail .reason-badge {
+    display: inline-block; font-family: var(--mono); font-size: 9px;
+    text-transform: uppercase; letter-spacing: 0.5px;
+    padding: 2px 8px; border-radius: 3px; margin-bottom: 10px;
+  }
+  .snipcut-review-detail .content {
+    font-size: 12px; color: var(--text);
+    word-break: break-word; line-height: 1.4;
+  }
+  .snipcut-review-actions {
+    display: flex; gap: 8px;
+  }
+  .snipcut-review-actions button { flex: 1; padding: 10px; }
+  .snipcut-review-list {
+    flex: 1; overflow-y: auto;
+    border-top: 1px solid var(--border); padding-top: 10px;
+  }
+  .snipcut-review-row {
+    display: flex; align-items: center; gap: 10px;
+    padding: 7px 10px; font-size: 12px;
+    background: var(--surface-2); margin-bottom: 3px;
+    border-radius: 4px; cursor: pointer;
+  }
+  .snipcut-review-row:hover { background: var(--surface-3); }
+  .snipcut-review-row.current {
+    background: var(--surface-3);
+    outline: 1px solid var(--accent);
+  }
+  .snipcut-review-row .tc {
+    font-family: var(--mono); font-size: 11px; color: var(--text-dim);
+    min-width: 90px;
+  }
+  .snipcut-review-row .label {
+    font-family: var(--mono); font-size: 9px;
+    text-transform: uppercase; letter-spacing: 0.4px;
+    padding: 1px 6px; border-radius: 3px;
+    min-width: 80px; text-align: center;
+  }
+  .snipcut-review-row .snippet {
+    flex: 1; color: var(--text-dim);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .snipcut-review-row .decision {
+    font-family: var(--mono); font-size: 10px;
+    min-width: 60px; text-align: right;
+  }
+  .snipcut-review-row .decision.cut { color: #ef4444; }
+  .snipcut-review-row .decision.keep { color: #22c55e; }
+  .snipcut-review-row .decision.pending { color: var(--text-dimmer); }
 
   /* ── Step Bar ── */
   .step-bar {
@@ -1361,7 +1478,11 @@
       <div id="snipcutDropZone" class="drop-zone">
         <div class="drop-zone-icon">&#127916;</div>
         <div class="drop-zone-title">Choose an MP4 to process</div>
-        <div class="drop-zone-sub">StreamYard recording → CFR conversion + AI cut detection</div>
+        <div class="drop-zone-sub" id="snipcutDropZoneSub">StreamYard recording → CFR conversion + AI cut detection</div>
+        <div class="snipcut-mode-toggle" style="display:flex;gap:6px;justify-content:center;margin-top:14px;">
+          <button type="button" class="snipcut-mode-btn active" data-mode="full" onclick="snipcutSetMode('full')">Full AI</button>
+          <button type="button" class="snipcut-mode-btn" data-mode="silence_only" onclick="snipcutSetMode('silence_only')">Silence only</button>
+        </div>
         <button class="btn-primary" onclick="snipcutPickFile()" style="margin-top:16px;padding:12px 32px;font-size:14px;">
           &#128193; Browse for File
         </button>
@@ -1372,6 +1493,32 @@
       </div>
     </div>
     <div id="snipcutRecentList" style="margin-top:24px;"></div>
+  </div>
+
+  <!-- ══ SNIPCUT REVIEW OVERLAY ══ -->
+  <div id="snipcutReviewView" class="snipcut-review-view" style="display:none;">
+    <div class="snipcut-review-header">
+      <button class="btn-ghost btn-sm" onclick="snipcutCloseReview()" title="Back (Esc)">&larr; Back</button>
+      <div class="snipcut-review-title" id="snipcutReviewTitle">—</div>
+      <div class="snipcut-review-counter" id="snipcutReviewCounter">0 / 0</div>
+      <button class="btn-primary btn-sm" onclick="snipcutExportRefined()" id="snipcutExportBtn">Export Refined EDL</button>
+    </div>
+    <div class="snipcut-review-body">
+      <div class="snipcut-review-left">
+        <video id="snipcutReviewVideo" controls preload="metadata" playsinline></video>
+        <div class="snipcut-review-hint">Space: play/pause &middot; K: keep &middot; C: cut &middot; &uarr;/&darr;: navigate &middot; Esc: back</div>
+      </div>
+      <div class="snipcut-review-right">
+        <div class="snipcut-review-detail" id="snipcutReviewDetail">
+          <div style="color:var(--text-dim);font-size:12px;">Select a marker to review</div>
+        </div>
+        <div class="snipcut-review-actions">
+          <button class="btn-ghost" onclick="snipcutDecide('keep')" id="snipcutKeepBtn">Keep (K)</button>
+          <button class="btn-primary" onclick="snipcutDecide('cut')" id="snipcutCutBtn">Cut (C)</button>
+        </div>
+      </div>
+    </div>
+    <div class="snipcut-review-list" id="snipcutReviewList"></div>
   </div>
 
   <!-- ══ HISTORY VIEW ══ -->
@@ -2641,14 +2788,36 @@ async function gatherSession(sessionId) {
 
 // ── SnipCut ──
 let snipcutPollTimer = null;
+let currentSnipcutMode = 'full';
 const SNIPCUT_DONE_STATUSES = ['done', 'error'];
+
+const SNIPCUT_REASON_EMOJI = {
+  silence: '🔵', filler: '🟡', repeated_take: '🔴', merged: '🟣', cut: '⚪'
+};
+const SNIPCUT_REASON_COLOR = {
+  silence: '#3b82f6', filler: '#eab308', repeated_take: '#ef4444',
+  merged: '#a855f7', cut: '#7a7a88'
+};
+
+function snipcutSetMode(mode) {
+  currentSnipcutMode = mode;
+  document.querySelectorAll('.snipcut-mode-btn').forEach(b => {
+    b.classList.toggle('active', b.dataset.mode === mode);
+  });
+  const sub = $('snipcutDropZoneSub');
+  if (sub) {
+    sub.textContent = mode === 'silence_only'
+      ? '~2 min · kills dead air only, no filler detection'
+      : 'StreamYard recording → CFR conversion + AI cut detection';
+  }
+}
 
 function snipcutStartFromPath(path) {
   if (!path || !path.trim()) { toast('Enter a file path'); return; }
   fetch('/api/snipcut/jobs', {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({ input_path: path.trim() }),
+    body: JSON.stringify({ input_path: path.trim(), mode: currentSnipcutMode }),
   }).then(r => r.json()).then(d => {
     if (d.error) { toast(d.error); return; }
     loadSnipcutJobs();
@@ -2723,11 +2892,13 @@ function renderSnipcutJobCard(j) {
         ${j.analysis_reasoning ? `<div style="margin-top:6px;color:var(--text-dimmer);font-size:11px;">${esc(j.analysis_reasoning)}</div>` : ''}
       </div>
       <div style="display:flex;gap:8px;margin-top:10px;align-items:center;flex-wrap:wrap;">
-        <button class="btn-primary btn-sm" onclick="snipcutOpenInResolve('${j.id}')">&#127916; Open in DaVinci Resolve</button>
+        <button class="btn-primary btn-sm" onclick="snipcutOpenReview('${j.id}')" title="Interactive review">&#128269; Review Markers</button>
+        <button class="btn-ghost btn-sm" onclick="snipcutOpenInResolve('${j.id}')">&#127916; Open in Resolve</button>
         ${j.edl_path ? `<button class="btn-ghost btn-sm" onclick="snipcutRevealFile('${(j.edl_path).replace(/'/g, "\\'")}')" style="font-family:var(--mono);font-size:10px;" title="Reveal EDL in Finder">EDL</button>` : ''}
+        ${j.refined_edl_path ? `<button class="btn-ghost btn-sm" onclick="snipcutRevealFile('${(j.refined_edl_path).replace(/'/g, "\\'")}')" style="font-family:var(--mono);font-size:10px;background:rgba(34,197,94,0.18);color:#22c55e;" title="Reveal refined EDL in Finder">REFINED</button>` : ''}
         ${j.cfr_output_path ? `<button class="btn-ghost btn-sm" onclick="snipcutRevealFile('${(j.cfr_output_path).replace(/'/g, "\\'")}')" style="font-family:var(--mono);font-size:10px;" title="Reveal CFR file in Finder">CFR</button>` : ''}
         ${j.transcript_path ? `<button class="btn-ghost btn-sm" onclick="snipcutRevealFile('${(j.transcript_path).replace(/'/g, "\\'")}')" style="font-family:var(--mono);font-size:10px;" title="Reveal transcript in Finder">TXT</button>` : ''}
-        ${j.markers_path ? `<button class="btn-ghost btn-sm" onclick="snipcutRevealFile('${(j.markers_path).replace(/'/g, "\\'")}')" style="font-family:var(--mono);font-size:10px;background:var(--yellow-dim);color:var(--yellow);border-color:var(--yellow-border);" title="Reveal markers list — review manually in DaVinci Resolve">MARKERS</button>` : ''}
+        ${j.markers_path ? `<button class="btn-ghost btn-sm" onclick="snipcutRevealFile('${(j.markers_path).replace(/'/g, "\\'")}')" style="font-family:var(--mono);font-size:10px;background:rgba(234,179,8,0.18);color:#eab308;" title="Reveal markers list">MARKERS</button>` : ''}
       </div>
       ${resolveBanner}
       ${cuts.length > 0 ? '<div style="margin-top:8px;max-height:200px;overflow-y:auto;">' +
@@ -2742,10 +2913,14 @@ function renderSnipcutJobCard(j) {
     // In-progress: show stage stepper + parallel progress bars
     const cfrPct = j.cfr_progress || 0;
     const txPct = j.transcribe_progress || 0;
-    const stageOrder = ['probing', 'processing', 'analyzing', 'generating_edl', 'done'];
+    const isSilenceOnly = (j.mode === 'silence_only');
+    const stageOrder = isSilenceOnly
+      ? ['probing', 'processing', 'detecting_silence', 'generating_edl', 'done']
+      : ['probing', 'processing', 'analyzing', 'generating_edl', 'done'];
     const stageLabels = {
       probing: 'Probe',
-      processing: 'Convert + Transcribe',
+      processing: isSilenceOnly ? 'Convert' : 'Convert + Transcribe',
+      detecting_silence: 'Detect Silence',
       analyzing: 'Analyze',
       generating_edl: 'Generate EDL',
       done: 'Done',
@@ -2776,6 +2951,8 @@ function renderSnipcutJobCard(j) {
           <div class="snipcut-progress-bar"><div class="snipcut-progress-fill" style="width:${txPct}%"></div></div>
           <div class="snipcut-progress-pct">${txPct.toFixed(0)}%</div>
         </div>`;
+    } else if (j.status === 'detecting_silence') {
+      body += '<div style="font-size:11px;color:var(--accent);margin-top:10px;">&#128266; Scanning audio for silence…</div>';
     } else if (j.status === 'analyzing') {
       body += '<div style="font-size:11px;color:var(--accent);margin-top:10px;">&#129302; Analyzing with Claude Sonnet…</div>';
     } else if (j.status === 'generating_edl') {
@@ -2845,6 +3022,231 @@ async function snipcutRevealFile(filePath) {
     headers: {'Content-Type':'application/json'},
     body: JSON.stringify({path: folder}),
   });
+}
+
+// ── SnipCut Interactive Review ──
+let snipcutReviewState = {
+  jobId: null,
+  jobTitle: '',
+  markers: [],
+  currentIndex: 0,
+  pauseAt: null,
+};
+
+function snipcutFmtTc(seconds) {
+  if (seconds == null || isNaN(seconds)) return '00:00:00';
+  const h = Math.floor(seconds / 3600);
+  const m = Math.floor((seconds % 3600) / 60);
+  const s = Math.floor(seconds % 60);
+  const cs = Math.floor((seconds % 1) * 100);
+  return `${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}.${String(cs).padStart(2,'0')}`;
+}
+
+async function snipcutOpenReview(jobId) {
+  try {
+    // Get job info for title
+    const jr = await fetch(`/api/snipcut/jobs/${jobId}`);
+    const job = await jr.json();
+    if (job.error) { toast(job.error); return; }
+    // Get markers
+    const mr = await fetch(`/api/snipcut/jobs/${jobId}/markers`);
+    const md = await mr.json();
+    if (md.error) { toast(md.error); return; }
+
+    snipcutReviewState.jobId = jobId;
+    snipcutReviewState.jobTitle = job.input_filename || 'Untitled';
+    snipcutReviewState.markers = md.markers || [];
+    snipcutReviewState.currentIndex = 0;
+    snipcutReviewState.pauseAt = null;
+
+    const view = $('snipcutReviewView');
+    const vid = $('snipcutReviewVideo');
+    vid.src = `/api/snipcut/jobs/${jobId}/video`;
+    vid.load();
+    view.style.display = 'flex';
+    $('snipcutReviewTitle').textContent = snipcutReviewState.jobTitle;
+
+    // Wire timeupdate to pause at marker.end + 1
+    vid.ontimeupdate = () => {
+      if (snipcutReviewState.pauseAt != null && vid.currentTime >= snipcutReviewState.pauseAt) {
+        vid.pause();
+        snipcutReviewState.pauseAt = null;
+      }
+    };
+
+    snipcutRenderReview();
+    if (snipcutReviewState.markers.length > 0) {
+      snipcutSelectMarker(0);
+    }
+    document.addEventListener('keydown', snipcutReviewKeyHandler);
+  } catch(e) {
+    console.error(e);
+    toast('Failed to open review');
+  }
+}
+
+function snipcutCloseReview() {
+  const view = $('snipcutReviewView');
+  const vid = $('snipcutReviewVideo');
+  try { vid.pause(); } catch(e) {}
+  vid.removeAttribute('src');
+  vid.load();
+  view.style.display = 'none';
+  document.removeEventListener('keydown', snipcutReviewKeyHandler);
+  snipcutReviewState.jobId = null;
+  snipcutReviewState.markers = [];
+  loadSnipcutJobs();
+}
+
+function snipcutReviewKeyHandler(e) {
+  // Ignore keystrokes typed into form fields
+  const tag = (e.target && e.target.tagName || '').toLowerCase();
+  if (tag === 'input' || tag === 'textarea' || tag === 'select') return;
+  const k = e.key;
+  if (k === 'Escape') { e.preventDefault(); snipcutCloseReview(); }
+  else if (k === 'k' || k === 'K') { e.preventDefault(); snipcutDecide('keep'); }
+  else if (k === 'c' || k === 'C') { e.preventDefault(); snipcutDecide('cut'); }
+  else if (k === 'ArrowDown') { e.preventDefault(); snipcutNavigate(1); }
+  else if (k === 'ArrowUp') { e.preventDefault(); snipcutNavigate(-1); }
+  else if (k === ' ') {
+    e.preventDefault();
+    const vid = $('snipcutReviewVideo');
+    if (vid.paused) vid.play(); else vid.pause();
+  }
+}
+
+function snipcutRenderReview() {
+  const st = snipcutReviewState;
+  const total = st.markers.length;
+  const cut = st.markers.filter(m => m.decision === 'cut').length;
+  const keep = st.markers.filter(m => m.decision === 'keep').length;
+  const reviewed = cut + keep;
+  $('snipcutReviewCounter').textContent = `${reviewed} / ${total} · ${cut} cut · ${keep} kept`;
+
+  const list = $('snipcutReviewList');
+  list.innerHTML = st.markers.map((m, i) => {
+    const reason = m.reason || 'cut';
+    const emoji = SNIPCUT_REASON_EMOJI[reason] || '⚪';
+    const color = SNIPCUT_REASON_COLOR[reason] || '#7a7a88';
+    const label = reason.toUpperCase().replace(/_/g, ' ');
+    const snippet = reason === 'silence'
+      ? `gap ${(m.end_seconds - m.start_seconds).toFixed(1)}s`
+      : (m.content || '');
+    const decisionText = m.decision === 'cut' ? '✓ cut'
+                       : m.decision === 'keep' ? '⊘ keep'
+                       : '⟳ pending';
+    const isCurrent = i === st.currentIndex ? 'current' : '';
+    return `<div class="snipcut-review-row snipcut-marker-${reason} ${isCurrent}" onclick="snipcutSelectMarker(${i})">
+      <span class="tc">${snipcutFmtTc(m.start_seconds)}</span>
+      <span class="label" style="background:${color}22;color:${color};">${emoji} ${esc(label)}</span>
+      <span class="snippet">${esc(snippet).slice(0,120)}</span>
+      <span class="decision ${m.decision}">${decisionText}</span>
+    </div>`;
+  }).join('');
+
+  // Render detail pane
+  const detail = $('snipcutReviewDetail');
+  if (st.markers.length === 0) {
+    detail.innerHTML = '<div style="color:var(--text-dim);font-size:12px;">No markers to review.</div>';
+    return;
+  }
+  const m = st.markers[st.currentIndex];
+  if (!m) { detail.innerHTML = ''; return; }
+  const reason = m.reason || 'cut';
+  const emoji = SNIPCUT_REASON_EMOJI[reason] || '⚪';
+  const color = SNIPCUT_REASON_COLOR[reason] || '#7a7a88';
+  const label = reason.toUpperCase().replace(/_/g, ' ');
+  const content = reason === 'silence'
+    ? `(silence gap, ${(m.end_seconds - m.start_seconds).toFixed(1)}s)`
+    : (m.content || '(no content)');
+  detail.innerHTML = `
+    <div class="tc">${snipcutFmtTc(m.start_seconds)} → ${snipcutFmtTc(m.end_seconds)} &nbsp;·&nbsp; ${(m.end_seconds - m.start_seconds).toFixed(2)}s</div>
+    <div class="reason-badge" style="background:${color}22;color:${color};">${emoji} ${esc(label)}</div>
+    <div class="content">${esc(content)}</div>
+    <div style="margin-top:10px;font-family:var(--mono);font-size:10px;color:var(--text-dimmer);">
+      ${st.currentIndex + 1} of ${st.markers.length} · decision: ${m.decision}
+    </div>
+  `;
+}
+
+function snipcutSelectMarker(index) {
+  const st = snipcutReviewState;
+  if (index < 0 || index >= st.markers.length) return;
+  st.currentIndex = index;
+  const m = st.markers[index];
+  const vid = $('snipcutReviewVideo');
+  // Seek to 1s before marker start, stay paused. Space to play.
+  const startPreview = Math.max(0, m.start_seconds - 1);
+  try {
+    vid.currentTime = startPreview;
+    st.pauseAt = m.end_seconds + 1;
+  } catch(e) { /* may fail until loaded */ }
+  snipcutRenderReview();
+  // Scroll current row into view
+  const rows = document.querySelectorAll('#snipcutReviewList .snipcut-review-row');
+  const row = rows[index];
+  if (row) row.scrollIntoView({block:'nearest', behavior:'smooth'});
+}
+
+function snipcutNavigate(delta) {
+  const st = snipcutReviewState;
+  const next = st.currentIndex + delta;
+  if (next < 0 || next >= st.markers.length) return;
+  snipcutSelectMarker(next);
+}
+
+async function snipcutDecide(decision) {
+  const st = snipcutReviewState;
+  if (st.markers.length === 0) return;
+  const m = st.markers[st.currentIndex];
+  if (!m) return;
+  // Optimistic update
+  m.decision = decision;
+  snipcutRenderReview();
+  // Fire PUT in background
+  try {
+    await fetch(`/api/snipcut/markers/${m.id}`, {
+      method: 'PUT',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({decision}),
+    });
+  } catch(e) { /* non-fatal */ }
+  // Advance to next pending marker; fall back to next unreviewed
+  const start = st.currentIndex + 1;
+  let nextPending = -1;
+  for (let i = start; i < st.markers.length; i++) {
+    if (st.markers[i].decision === 'pending') { nextPending = i; break; }
+  }
+  if (nextPending === -1) {
+    // Try from start
+    for (let i = 0; i < start; i++) {
+      if (st.markers[i].decision === 'pending') { nextPending = i; break; }
+    }
+  }
+  if (nextPending !== -1) {
+    snipcutSelectMarker(nextPending);
+  } else {
+    // All reviewed
+    snipcutRenderReview();
+    toast('All markers reviewed. Click Export Refined EDL.');
+  }
+}
+
+async function snipcutExportRefined() {
+  const st = snipcutReviewState;
+  if (!st.jobId) return;
+  const btn = $('snipcutExportBtn');
+  if (btn) { btn.disabled = true; btn.textContent = 'Exporting…'; }
+  try {
+    const r = await fetch(`/api/snipcut/jobs/${st.jobId}/export-refined`, {method: 'POST'});
+    const d = await r.json();
+    if (d.error) { toast(d.error); return; }
+    toast(`Refined EDL saved · ${d.approved_count} cuts · ${d.kept_segments} segments kept`);
+  } catch(e) {
+    toast('Export failed');
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = 'Export Refined EDL'; }
+  }
 }
 
 function startSnipcutPolling() {
