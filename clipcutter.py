@@ -185,6 +185,8 @@ def init_db():
         "ALTER TABLE snipcut_jobs ADD COLUMN edl_path TEXT DEFAULT ''",
         "ALTER TABLE snipcut_jobs ADD COLUMN resolve_status TEXT DEFAULT ''",
         "ALTER TABLE snipcut_jobs ADD COLUMN transcript_path TEXT DEFAULT ''",
+        "ALTER TABLE snipcut_jobs ADD COLUMN output_fps INTEGER DEFAULT 30",
+        "ALTER TABLE snipcut_jobs ADD COLUMN markers_path TEXT DEFAULT ''",
     ]:
         try:
             conn.execute(migration)
@@ -1275,17 +1277,19 @@ def _snipcut_update(job_id: str, **fields):
         conn.close()
 
 
-def snipcut_convert_cfr(input_path: str, output_path: str, job_id: str, target_fps: int = 30) -> str:
-    """Convert to CFR or copy bit-for-bit if already CFR. Updates cfr_progress via job_id."""
+def snipcut_convert_cfr(input_path: str, output_path: str, job_id: str, target_fps: int = 30) -> tuple:
+    """Convert to CFR or copy bit-for-bit if already CFR.
+    Returns (output_path, actual_fps) — actual_fps is the source fps when copying,
+    or target_fps when re-encoding."""
     info = snipcut_probe(input_path)
     duration_us = info["duration"] * 1_000_000
 
     if not info["is_vfr"]:
-        # Already CFR — copy (zero quality loss)
+        # Already CFR — copy (zero quality loss). Output keeps source fps.
         _snipcut_update(job_id, cfr_progress=10.0)
         shutil.copy2(input_path, output_path)
         _snipcut_update(job_id, cfr_progress=100.0, cfr_output_path=output_path)
-        return output_path
+        return output_path, round(info["fps"])
 
     cmd = [
         "ffmpeg", "-i", input_path,
@@ -1314,7 +1318,7 @@ def snipcut_convert_cfr(input_path: str, output_path: str, job_id: str, target_f
         raise RuntimeError(f"FFmpeg CFR conversion failed: {stderr[-300:]}")
 
     _snipcut_update(job_id, cfr_progress=100.0, cfr_output_path=output_path)
-    return output_path
+    return output_path, target_fps
 
 
 def snipcut_extract_audio(input_path: str, audio_path: str):
@@ -1581,6 +1585,39 @@ def snipcut_generate_clean_transcript(words: list, cuts: list, output_path: str)
     Path(output_path).write_text("\n".join(lines) + "\n")
 
 
+def snipcut_generate_markers_txt(merged_cuts: list, output_path: str, title: str,
+                                  duration: float, fps: int = 30):
+    """Human-readable marker list — timecodes + reasons + content snippets.
+    Non-destructive alternative to the cuts EDL: the user imports the CFR video
+    manually, opens this file alongside, and jumps to each timecode to review."""
+    def fmt_mm_ss(seconds: float) -> str:
+        m = int(seconds // 60)
+        s = int(seconds % 60)
+        return f"{m}:{s:02d}"
+
+    total_flagged = sum(max(0, c["end"] - c["start"]) for c in merged_cuts)
+    lines = [
+        f"SnipCut Markers — {title}",
+        f"Video: {fmt_mm_ss(duration)} @ {fps}fps · {len(merged_cuts)} markers · {fmt_mm_ss(total_flagged)} flagged",
+        "",
+        "Review each marker in DaVinci Resolve — jump to the timecode and cut manually if needed.",
+        "",
+    ]
+    for c in merged_cuts:
+        tc = snipcut_seconds_to_tc(c["start"], fps)
+        reason_raw = (c.get("reason") or "cut")
+        if reason_raw == "silence":
+            gap = c["end"] - c["start"]
+            reason = f"SILENCE {gap:.1f}s"
+            content = "(gap)"
+        else:
+            reason = reason_raw.upper().replace("_", " ")
+            content_raw = (c.get("content") or "").strip()
+            content = f'"{content_raw[:100]}"' if content_raw else ""
+        lines.append(f" {tc}  {reason:<16} {content}")
+    Path(output_path).write_text("\n".join(lines) + "\n")
+
+
 def snipcut_generate_edl(keeps: list, edl_path: str, title: str, source_name: str = "AX", fps: int = 30):
     """Write a CMX 3600 EDL file.
     Each 'keep' segment becomes an event; record timecodes are sequential."""
@@ -1727,10 +1764,21 @@ def snipcut_process(job_id: str):
         has_cfr = job["cfr_output_path"] and os.path.exists(job["cfr_output_path"])
         has_transcript = job["transcript_json"] and len(job["transcript_json"]) > 10
 
+        # Determine output fps — needed for EDL timecode generation
+        output_fps = job.get("output_fps") or 30
+
         if has_cfr and has_transcript:
             cfr_output = job["cfr_output_path"]
             words = json.loads(job["transcript_json"])
-            print(f"  SnipCut: resuming — CFR + transcript exist ({len(words)} words)")
+            # Re-probe to confirm fps (in case an older job is missing output_fps)
+            if not job.get("output_fps"):
+                try:
+                    cfr_info = snipcut_probe(cfr_output)
+                    output_fps = round(cfr_info["fps"]) or 30
+                    _snipcut_update(job_id, output_fps=output_fps)
+                except Exception:
+                    pass
+            print(f"  SnipCut: resuming — CFR + transcript exist ({len(words)} words, {output_fps}fps)")
         else:
             # Need to run at least one of CFR or transcribe
             _snipcut_update(job_id, status="processing")
@@ -1743,6 +1791,15 @@ def snipcut_process(job_id: str):
                 _snipcut_update(job_id, cfr_output_path=cfr_output, cfr_progress=100.0)
                 has_cfr = True
                 print(f"  SnipCut: found existing CFR file, skipping conversion")
+
+            # If CFR already exists (by any means), probe it for fps
+            if has_cfr and not job.get("output_fps"):
+                try:
+                    cfr_info = snipcut_probe(cfr_output)
+                    output_fps = round(cfr_info["fps"]) or 30
+                    _snipcut_update(job_id, output_fps=output_fps)
+                except Exception:
+                    pass
 
             def cfr_task():
                 return snipcut_convert_cfr(input_path, cfr_output, job_id)
@@ -1759,7 +1816,8 @@ def snipcut_process(job_id: str):
                     futures["tx"] = pool.submit(transcribe_task)
 
                 if "cfr" in futures:
-                    futures["cfr"].result()
+                    _, output_fps = futures["cfr"].result()
+                    _snipcut_update(job_id, output_fps=output_fps)
                 if "tx" in futures:
                     words = futures["tx"].result()
                 elif has_transcript:
@@ -1796,16 +1854,37 @@ def snipcut_process(job_id: str):
 
         # ── EDL + clean transcript (always regenerate — fast) ──
         _snipcut_update(job_id, status="generating_edl")
+
+        # Safeguard: re-probe the actual CFR file and use its real fps for the EDL.
+        # This guarantees EDL timecodes match the file, even if something upstream
+        # miscalculated (e.g. source was already CFR at 60fps).
+        try:
+            cfr_info = snipcut_probe(cfr_output)
+            actual_fps = round(cfr_info["fps"]) or output_fps
+            if actual_fps != output_fps:
+                print(f"  SnipCut: CFR file is {actual_fps}fps (expected {output_fps}) — using actual for EDL")
+                output_fps = actual_fps
+                _snipcut_update(job_id, output_fps=output_fps)
+        except Exception as e:
+            print(f"  SnipCut: couldn't re-probe CFR file ({e}), using {output_fps}fps for EDL")
+
         merged_cuts = snipcut_merge_cuts(ai_cuts, silence_gaps)
         keeps = snipcut_compute_keeps(merged_cuts, info["duration"])
         edl_path = str(Path(cfr_output).with_suffix(".edl"))
         title = Path(input_path).stem
-        snipcut_generate_edl(keeps, edl_path, title)
+        snipcut_generate_edl(keeps, edl_path, title, fps=output_fps)
+
+        # Non-destructive marker list — preferred over the cuts EDL because
+        # small timing errors in the cuts don't matter when the user reviews manually.
+        markers_path = str(Path(input_path).with_name(f"{title}_markers.txt"))
+        snipcut_generate_markers_txt(merged_cuts, markers_path, title,
+                                      info["duration"], fps=output_fps)
 
         transcript_path = str(Path(input_path).with_name(f"{title}_transcript.txt"))
         snipcut_generate_clean_transcript(words, merged_cuts, transcript_path)
 
-        _snipcut_update(job_id, edl_path=edl_path, transcript_path=transcript_path, status="done")
+        _snipcut_update(job_id, edl_path=edl_path, transcript_path=transcript_path,
+                        markers_path=markers_path, status="done")
 
     except Exception as e:
         if os.path.exists(audio_path):
@@ -2463,7 +2542,7 @@ def api_snipcut_list():
         rows = rows_to_list(conn.execute(
             "SELECT id, input_filename, status, error_text, duration_seconds, is_vfr, "
             "cfr_output_path, cfr_progress, transcribe_progress, cuts_json, "
-            "analysis_reasoning, edl_path, resolve_status, transcript_path, created_at "
+            "analysis_reasoning, edl_path, resolve_status, transcript_path, output_fps, markers_path, created_at "
             "FROM snipcut_jobs ORDER BY created_at DESC LIMIT 20"
         ).fetchall())
     finally:

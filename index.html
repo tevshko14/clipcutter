@@ -2727,6 +2727,7 @@ function renderSnipcutJobCard(j) {
         ${j.edl_path ? `<button class="btn-ghost btn-sm" onclick="snipcutRevealFile('${(j.edl_path).replace(/'/g, "\\'")}')" style="font-family:var(--mono);font-size:10px;" title="Reveal EDL in Finder">EDL</button>` : ''}
         ${j.cfr_output_path ? `<button class="btn-ghost btn-sm" onclick="snipcutRevealFile('${(j.cfr_output_path).replace(/'/g, "\\'")}')" style="font-family:var(--mono);font-size:10px;" title="Reveal CFR file in Finder">CFR</button>` : ''}
         ${j.transcript_path ? `<button class="btn-ghost btn-sm" onclick="snipcutRevealFile('${(j.transcript_path).replace(/'/g, "\\'")}')" style="font-family:var(--mono);font-size:10px;" title="Reveal transcript in Finder">TXT</button>` : ''}
+        ${j.markers_path ? `<button class="btn-ghost btn-sm" onclick="snipcutRevealFile('${(j.markers_path).replace(/'/g, "\\'")}')" style="font-family:var(--mono);font-size:10px;background:var(--yellow-dim);color:var(--yellow);border-color:var(--yellow-border);" title="Reveal markers list — review manually in DaVinci Resolve">MARKERS</button>` : ''}
       </div>
       ${resolveBanner}
       ${cuts.length > 0 ? '<div style="margin-top:8px;max-height:200px;overflow-y:auto;">' +
