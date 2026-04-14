@@ -3348,20 +3348,19 @@ function stopSnipcutPolling() {
   document.addEventListener('DOMContentLoaded', () => {
     const dz = zone();
     if (!dz) return;
-    ['dragenter', 'dragover'].forEach(ev => dz.addEventListener(ev, (e) => { prevent(e); dz.classList.add('active'); }));
-    ['dragleave', 'drop'].forEach(ev => dz.addEventListener(ev, (e) => { prevent(e); dz.classList.remove('active'); }));
-    // Note: primary drop handling is done Python-side via pywebview's
-    // DOMEventHandler which has access to real file paths (pywebviewFullPath).
-    // This JS handler is a secondary fallback for the rare case where
-    // file.path is available directly (e.g. Electron-style runtimes).
-    dz.addEventListener('drop', async (e) => {
-      const file = e.dataTransfer.files[0];
+    ['dragenter', 'dragover'].forEach(ev => dz.addEventListener(ev, (e) => { e.preventDefault(); e.stopPropagation(); dz.classList.add('active'); }));
+    ['dragleave', 'drop'].forEach(ev => dz.addEventListener(ev, (e) => { e.preventDefault(); e.stopPropagation(); dz.classList.remove('active'); }));
+    dz.addEventListener('drop', (e) => {
+      const file = e.dataTransfer && e.dataTransfer.files[0];
       if (!file) return;
-      const path = file.path || '';
-      if (path) {
-        snipcutStartFromPath(path);
+      const videoExts = ['.mp4','.mkv','.mov','.webm','.avi','.ts','.mts','.flv','.m4v','.wmv'];
+      if (!videoExts.some(ext => file.name.toLowerCase().endsWith(ext))) {
+        toast('Unsupported format — drop a video file (.mp4, .mkv, .mov, etc.)');
+        return;
       }
-      // If no path, the Python-side handler already took care of it.
+      if (file.path) { snipcutStartFromPath(file.path); return; }
+      toast('Opening file picker…');
+      snipcutPickFile();
     });
   });
 })();
