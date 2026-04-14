@@ -1622,11 +1622,11 @@ function esc(s) {
   return d.innerHTML;
 }
 
-function toast(msg) {
+function toast(msg, duration) {
   const t = $('toast');
   t.textContent = msg;
   t.classList.add('show');
-  setTimeout(() => t.classList.remove('show'), 4000);
+  setTimeout(() => t.classList.remove('show'), duration || 4000);
 }
 
 function timeAgo(dateStr) {
@@ -2963,16 +2963,7 @@ function renderSnipcutJobCard(j) {
   } else if (j.status === 'done') {
     const cuts = j.cuts_json ? JSON.parse(j.cuts_json) : [];
     const totalCutTime = cuts.reduce((sum, c) => sum + (c.end - c.start), 0);
-    // Resolve status
-    let resolveState = j.resolve_status || '';
     let resolveBanner = '';
-    if (resolveState.startsWith('opening')) {
-      resolveBanner = '<div style="margin-top:10px;color:var(--blue);font-size:11px;">&#128250; Opening in DaVinci Resolve…</div>';
-    } else if (resolveState.startsWith('opened:')) {
-      resolveBanner = `<div style="margin-top:10px;color:var(--green);font-size:11px;">&#10003; Opened as: ${esc(resolveState.slice(7))}</div>`;
-    } else if (resolveState.startsWith('error:')) {
-      resolveBanner = `<div style="margin-top:10px;color:var(--red);font-size:11px;">&#9888; ${esc(resolveState.slice(6))}</div>`;
-    }
 
     body = `
       <div class="snipcut-cuts-summary">
@@ -2982,15 +2973,14 @@ function renderSnipcutJobCard(j) {
         ${j.analysis_reasoning ? `<div style="margin-top:6px;color:var(--text-dimmer);font-size:11px;">${esc(j.analysis_reasoning)}</div>` : ''}
       </div>
       <div style="display:flex;gap:8px;margin-top:10px;align-items:center;flex-wrap:wrap;">
-        <button class="btn-primary btn-sm" onclick="snipcutOpenReview('${j.id}')" title="Interactive review">&#128269; Review Markers</button>
-        <button class="btn-ghost btn-sm" onclick="snipcutOpenInResolve('${j.id}')">&#127916; Open in Resolve</button>
+        <button class="btn-primary btn-sm" onclick="snipcutSendToResolve('${j.id}')" title="Copy setup script + open Resolve">&#127916; Send to Resolve</button>
+        <button class="btn-ghost btn-sm" onclick="snipcutOpenReview('${j.id}')" title="Interactive review">&#128269; Review Markers</button>
         ${j.edl_path ? `<button class="btn-ghost btn-sm" onclick="snipcutRevealFile('${(j.edl_path).replace(/'/g, "\\'")}')" style="font-family:var(--mono);font-size:10px;" title="Reveal EDL in Finder">EDL</button>` : ''}
         ${j.refined_edl_path ? `<button class="btn-ghost btn-sm" onclick="snipcutRevealFile('${(j.refined_edl_path).replace(/'/g, "\\'")}')" style="font-family:var(--mono);font-size:10px;background:rgba(34,197,94,0.18);color:#22c55e;" title="Reveal refined EDL in Finder">REFINED</button>` : ''}
         ${j.cfr_output_path ? `<button class="btn-ghost btn-sm" onclick="snipcutRevealFile('${(j.cfr_output_path).replace(/'/g, "\\'")}')" style="font-family:var(--mono);font-size:10px;" title="Reveal CFR file in Finder">CFR</button>` : ''}
         ${j.transcript_path ? `<button class="btn-ghost btn-sm" onclick="snipcutRevealFile('${(j.transcript_path).replace(/'/g, "\\'")}')" style="font-family:var(--mono);font-size:10px;" title="Reveal transcript in Finder">TXT</button>` : ''}
         ${j.markers_path ? `<button class="btn-ghost btn-sm" onclick="snipcutRevealFile('${(j.markers_path).replace(/'/g, "\\'")}')" style="font-family:var(--mono);font-size:10px;background:rgba(234,179,8,0.18);color:#eab308;" title="Reveal markers list">MARKERS</button>` : ''}
         ${j.srt_path ? `<button class="btn-ghost btn-sm" onclick="snipcutRevealFile('${(j.srt_path).replace(/'/g, "\\'")}')" style="font-family:var(--mono);font-size:10px;background:rgba(59,130,246,0.18);color:#3b82f6;" title="SRT subtitle markers — drag onto Resolve timeline">SRT</button>` : ''}
-        ${j.resolve_script ? `<button class="btn-ghost btn-sm" onclick="snipcutCopyResolveScript('${j.id}')" style="font-family:var(--mono);font-size:10px;background:rgba(168,85,247,0.18);color:#a855f7;" title="Copy Python script for Resolve Console → Workspace → Console">COPY SCRIPT</button>` : ''}
       </div>
       ${resolveBanner}
       ${snipcutRenderMetadata(j)}
@@ -3099,12 +3089,11 @@ async function snipcutDelete(jobId) {
   loadSnipcutJobs();
 }
 
-async function snipcutOpenInResolve(jobId) {
+async function snipcutSendToResolve(jobId) {
   const r = await fetch(`/api/snipcut/jobs/${jobId}/open-resolve`, { method: 'POST' });
   const d = await r.json();
   if (d.error) { toast(d.error); return; }
-  toast('Opening in DaVinci Resolve…');
-  startSnipcutPolling();
+  toast('Script copied! In Resolve: Workspace → Console → ⌘V → Enter', 8000);
 }
 
 async function snipcutRevealFile(filePath) {

@@ -1988,10 +1988,11 @@ def _srt_tc(seconds: float) -> str:
     return f"{h:02d}:{m:02d}:{s:02d},{ms:03d}"
 
 
-def snipcut_generate_resolve_script(merged_cuts: list, output_fps: int) -> str:
-    """Generate a Python script for Resolve's Console that adds native markers.
-    User pastes this into Workspace → Console to get real timeline markers."""
-    marker_lines = []
+def snipcut_generate_resolve_script(merged_cuts: list, output_fps: int,
+                                     cfr_path: str = "", srt_path: str = "",
+                                     project_name: str = "") -> str:
+    """Generate a Lua script for Resolve's Console (Workspace → Console).
+    Creates project, imports media, builds timeline, adds markers, imports SRT."""
     color_map = {
         "silence": "Cyan",
         "filler": "Yellow",
@@ -1999,6 +2000,12 @@ def snipcut_generate_resolve_script(merged_cuts: list, output_fps: int) -> str:
         "merged": "Purple",
         "cut": "Blue",
     }
+
+    # Escape paths for Lua string literals
+    def lua_str(s):
+        return s.replace("\\", "\\\\").replace('"', '\\"')
+
+    marker_lua = []
     for c in merged_cuts:
         start = c.get("start", 0)
         end = c.get("end", 0)
@@ -2008,27 +2015,58 @@ def snipcut_generate_resolve_script(merged_cuts: list, output_fps: int) -> str:
         frame_id = round(start * output_fps)
         content = (c.get("content") or "").strip().replace('"', '\\"')[:80]
         name = reason.upper().replace("_", " ")
-        if reason == "silence":
-            note = f"gap {end - start:.1f}s"
-        else:
-            note = content or name
-        marker_lines.append(
-            f'tl.AddMarker({frame_id}, "{color}", "{name}", "{note}", {duration_frames})'
+        note = f"gap {end - start:.1f}s" if reason == "silence" else (content or name)
+        marker_lua.append(
+            f'tl:AddMarker({frame_id}, "{color}", "{name}", "{note}", {duration_frames})'
         )
 
-    script = (
-        "# SnipCut markers — paste into Resolve Console (Workspace → Console)\n"
-        "resolve = bmd.scriptapp('Resolve')\n"  # noqa
-        "pm = resolve.GetProjectManager()\n"
-        "proj = pm.GetCurrentProject()\n"
-        "tl = proj.GetCurrentTimeline()\n"
-        "if tl:\n"
-    )
-    for line in marker_lines:
-        script += f"    {line}\n"
-    script += f'    print("Added {len(marker_lines)} markers")\n'
-    script += 'else:\n    print("No timeline open")\n'
-    return script
+    lines = [
+        "-- SnipCut: paste into Resolve Console (Workspace > Console)",
+        'resolve = Resolve()',
+        'pm = resolve:GetProjectManager()',
+        '',
+        f'proj = pm:CreateProject("{lua_str(project_name)}")',
+        'if not proj then',
+        '  proj = pm:GetCurrentProject()',
+        f'  print("Project exists, using: " .. proj:GetName())',
+        'end',
+        '',
+    ]
+
+    if cfr_path:
+        lines += [
+            f'ms = resolve:GetMediaStorage()',
+            f'ms:AddItemListToMediaPool({{"{lua_str(cfr_path)}"}})',
+            'mp = proj:GetMediaPool()',
+            'clips = mp:GetRootFolder():GetClipList()',
+            'if #clips > 0 then',
+            '  tl = mp:CreateTimelineFromClips("Timeline 1", clips)',
+            '  print("Timeline created with " .. #clips .. " clip(s)")',
+        ]
+    else:
+        lines += [
+            'tl = proj:GetCurrentTimeline()',
+            'if tl then',
+        ]
+
+    if marker_lua:
+        for m in marker_lua:
+            lines.append(f'  {m}')
+        lines.append(f'  print("Added {len(marker_lua)} markers")')
+
+    if srt_path:
+        lines += [
+            f'  tl:ImportIntoTimeline("{lua_str(srt_path)}", {{}})',
+            '  print("SRT subtitles imported")',
+        ]
+
+    lines += [
+        'else',
+        '  print("No timeline — import media first")',
+        'end',
+    ]
+
+    return "\n".join(lines)
 
 
 def snipcut_finalize_outputs(job_id: str, input_path: str, cfr_output: str,
@@ -2065,7 +2103,11 @@ def snipcut_finalize_outputs(job_id: str, input_path: str, cfr_output: str,
     srt_path = str(Path(input_path).with_name(f"{title}_markers.srt"))
     snipcut_generate_srt(merged_cuts, srt_path)
 
-    resolve_script = snipcut_generate_resolve_script(merged_cuts, output_fps)
+    resolve_script = snipcut_generate_resolve_script(
+        merged_cuts, output_fps,
+        cfr_path=cfr_output, srt_path=srt_path,
+        project_name=title,
+    )
 
     snipcut_populate_markers_table(job_id, merged_cuts)
 
@@ -3019,32 +3061,34 @@ def api_snipcut_pending_file():
 
 @app.route("/api/snipcut/jobs/<job_id>/open-resolve", methods=["POST"])
 def api_snipcut_open_resolve(job_id):
+    """Copy Lua setup script to clipboard and launch DaVinci Resolve."""
     conn = get_db()
     try:
         job = row_to_dict(conn.execute(
-            "SELECT input_filename, cfr_output_path, edl_path FROM snipcut_jobs WHERE id = ?",
+            "SELECT resolve_script FROM snipcut_jobs WHERE id = ?",
             (job_id,)
         ).fetchone())
     finally:
         conn.close()
     if not job:
         return jsonify({"error": "Job not found"}), 404
-    if not job["cfr_output_path"] or not job["edl_path"]:
-        return jsonify({"error": "Job not yet complete"}), 400
+    script = job.get("resolve_script") or ""
+    if not script:
+        return jsonify({"error": "No script generated for this job"}), 400
 
-    project_name = Path(job["input_filename"]).stem  # "042 - SOFI.mp4" → "042 - SOFI"
+    # Copy script to clipboard via pbcopy
+    try:
+        proc = subprocess.run(["pbcopy"], input=script.encode("utf-8"), timeout=5)
+    except Exception as e:
+        return jsonify({"error": f"Clipboard copy failed: {e}"}), 500
 
-    # Run in a thread so HTTP doesn't block — but poll result via UI
-    def run_open():
-        _snipcut_update(job_id, resolve_status="opening")
-        result = snipcut_open_in_resolve(job["cfr_output_path"], job["edl_path"], project_name)
-        if result.get("ok"):
-            _snipcut_update(job_id, resolve_status=f"opened:{result.get('project', '')}")
-        else:
-            _snipcut_update(job_id, resolve_status=f"error:{result.get('error', 'unknown')}")
+    # Launch Resolve (non-blocking)
+    try:
+        subprocess.Popen(["open", "-a", "DaVinci Resolve"])
+    except Exception:
+        pass  # Not fatal — user can open Resolve manually
 
-    threading.Thread(target=run_open, daemon=True).start()
-    return jsonify({"ok": True, "message": "Opening in DaVinci Resolve…"})
+    return jsonify({"ok": True})
 
 
 # ---------- SnipCut Interactive Review Routes ----------
