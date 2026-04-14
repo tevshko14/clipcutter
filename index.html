@@ -1195,6 +1195,40 @@
   .snipcut-cut-reason.merged { background: rgba(168,85,247,0.18); color: #a855f7; }
   .snipcut-cut-content { flex: 1; color: var(--text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
+  /* ── SnipCut metadata section ── */
+  .snipcut-metadata {
+    margin-top: 12px; padding: 10px 12px;
+    background: var(--surface-2); border-radius: 6px;
+    border: 1px solid var(--border);
+  }
+  .snipcut-metadata-row {
+    display: flex; align-items: flex-start; gap: 8px;
+    margin-bottom: 6px; font-size: 12px;
+  }
+  .snipcut-metadata-row:last-child { margin-bottom: 0; }
+  .snipcut-metadata-label {
+    font-family: var(--mono); font-size: 9px;
+    text-transform: uppercase; letter-spacing: 0.4px;
+    color: var(--text-dimmer); min-width: 38px; padding-top: 2px;
+    flex-shrink: 0;
+  }
+  .snipcut-metadata-value {
+    flex: 1; color: var(--text); line-height: 1.4;
+    word-break: break-word;
+  }
+  .snipcut-metadata-value.tags { display: flex; flex-wrap: wrap; gap: 4px; }
+  .snipcut-metadata-value.tags span {
+    font-family: var(--mono); font-size: 10px;
+    background: var(--surface-3); color: var(--text-dim);
+    padding: 2px 7px; border-radius: 3px;
+  }
+  .snipcut-copy-btn {
+    font-size: 10px; padding: 2px 6px; border-radius: 3px;
+    background: transparent; border: 1px solid var(--border);
+    color: var(--text-dimmer); cursor: pointer; flex-shrink: 0;
+  }
+  .snipcut-copy-btn:hover { color: var(--text); border-color: var(--text-dim); }
+
   /* Color-coded left border per marker reason */
   .snipcut-marker-filler        { border-left: 3px solid #eab308; }
   .snipcut-marker-repeated_take { border-left: 3px solid #ef4444; }
@@ -2862,6 +2896,50 @@ async function loadSnipcutJobs() {
   } catch(e) { /* silent */ }
 }
 
+function snipcutCopyField(jobId, field) {
+  try {
+    const el = document.querySelector(`[data-meta-job="${jobId}"]`);
+    if (!el) return;
+    const meta = JSON.parse(el.dataset.meta);
+    let text = '';
+    if (field === 'title') text = meta.title || '';
+    else if (field === 'desc') text = meta.description || '';
+    else if (field === 'tags') text = (meta.tags || []).join(', ');
+    else if (field === 'all') text = `${meta.title}\n\n${meta.description}\n\nTags: ${(meta.tags||[]).join(', ')}`;
+    navigator.clipboard.writeText(text).then(() => toast('Copied!')).catch(() => toast('Copy failed'));
+  } catch(e) { toast('Copy failed'); }
+}
+
+function snipcutRenderMetadata(j) {
+  if (!j.metadata_json) return '';
+  let meta;
+  try { meta = JSON.parse(j.metadata_json); } catch(e) { return ''; }
+  if (!meta || !meta.title) return '';
+  const tags = (meta.tags || []).map(t => `<span>${esc(t)}</span>`).join('');
+  const safeJson = esc(JSON.stringify(meta));
+  return `
+    <div class="snipcut-metadata" data-meta-job="${j.id}" data-meta="${safeJson}">
+      <div class="snipcut-metadata-row">
+        <span class="snipcut-metadata-label">Title</span>
+        <span class="snipcut-metadata-value">${esc(meta.title)}</span>
+        <button class="snipcut-copy-btn" onclick="snipcutCopyField('${j.id}','title')">Copy</button>
+      </div>
+      <div class="snipcut-metadata-row">
+        <span class="snipcut-metadata-label">Desc</span>
+        <span class="snipcut-metadata-value">${esc(meta.description || '')}</span>
+        <button class="snipcut-copy-btn" onclick="snipcutCopyField('${j.id}','desc')">Copy</button>
+      </div>
+      <div class="snipcut-metadata-row">
+        <span class="snipcut-metadata-label">Tags</span>
+        <span class="snipcut-metadata-value tags">${tags}</span>
+        <button class="snipcut-copy-btn" onclick="snipcutCopyField('${j.id}','tags')">Copy</button>
+      </div>
+      <div style="margin-top:6px;text-align:right;">
+        <button class="snipcut-copy-btn" onclick="snipcutCopyField('${j.id}','all')" style="font-weight:500;">Copy All</button>
+      </div>
+    </div>`;
+}
+
 function renderSnipcutJobCard(j) {
   const durMin = j.duration_seconds ? (j.duration_seconds / 60).toFixed(1) : '—';
   const vfrBadge = j.is_vfr ? '<span class="clip-badge downloading" style="font-size:9px;">VFR → CFR</span>'
@@ -2901,6 +2979,7 @@ function renderSnipcutJobCard(j) {
         ${j.markers_path ? `<button class="btn-ghost btn-sm" onclick="snipcutRevealFile('${(j.markers_path).replace(/'/g, "\\'")}')" style="font-family:var(--mono);font-size:10px;background:rgba(234,179,8,0.18);color:#eab308;" title="Reveal markers list">MARKERS</button>` : ''}
       </div>
       ${resolveBanner}
+      ${snipcutRenderMetadata(j)}
       ${cuts.length > 0 ? '<div style="margin-top:8px;max-height:200px;overflow-y:auto;">' +
         cuts.slice(0, 50).map(c => `
           <div class="snipcut-cut-row">
@@ -3059,6 +3138,7 @@ async function snipcutOpenReview(jobId) {
     snipcutReviewState.currentIndex = 0;
     snipcutReviewState.pauseAt = null;
 
+    stopSnipcutPolling();
     const view = $('snipcutReviewView');
     const vid = $('snipcutReviewVideo');
     vid.src = `/api/snipcut/jobs/${jobId}/video`;
@@ -3200,33 +3280,22 @@ async function snipcutDecide(decision) {
   if (st.markers.length === 0) return;
   const m = st.markers[st.currentIndex];
   if (!m) return;
-  // Optimistic update
   m.decision = decision;
-  snipcutRenderReview();
-  // Fire PUT in background
-  try {
-    await fetch(`/api/snipcut/markers/${m.id}`, {
-      method: 'PUT',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({decision}),
-    });
-  } catch(e) { /* non-fatal */ }
-  // Advance to next pending marker; fall back to next unreviewed
-  const start = st.currentIndex + 1;
+  fetch(`/api/snipcut/markers/${m.id}`, {
+    method: 'PUT',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({decision}),
+  }).catch(() => {});
+  // Find next pending marker; wrap around if none after current.
+  const n = st.markers.length;
   let nextPending = -1;
-  for (let i = start; i < st.markers.length; i++) {
-    if (st.markers[i].decision === 'pending') { nextPending = i; break; }
-  }
-  if (nextPending === -1) {
-    // Try from start
-    for (let i = 0; i < start; i++) {
-      if (st.markers[i].decision === 'pending') { nextPending = i; break; }
-    }
+  for (let i = 1; i <= n; i++) {
+    const idx = (st.currentIndex + i) % n;
+    if (st.markers[idx].decision === 'pending') { nextPending = idx; break; }
   }
   if (nextPending !== -1) {
     snipcutSelectMarker(nextPending);
   } else {
-    // All reviewed
     snipcutRenderReview();
     toast('All markers reviewed. Click Export Refined EDL.');
   }

@@ -190,6 +190,7 @@ def init_db():
         "ALTER TABLE snipcut_jobs ADD COLUMN mode TEXT DEFAULT 'full'",
         "ALTER TABLE snipcut_jobs ADD COLUMN refined_edl_path TEXT DEFAULT ''",
         "ALTER TABLE snipcut_jobs ADD COLUMN refined_markers_path TEXT DEFAULT ''",
+        "ALTER TABLE snipcut_jobs ADD COLUMN metadata_json TEXT DEFAULT ''",
     ]:
         try:
             conn.execute(migration)
@@ -1541,6 +1542,48 @@ def snipcut_analyze(words: list, api_key: str) -> dict:
     return {"cuts": unique, "reasoning": reasoning}
 
 
+def snipcut_generate_metadata(words: list, api_key: str) -> dict:
+    """Generate a YouTube title, description, and tags from the transcript."""
+    if not api_key or not words:
+        return {}
+
+    # Build a condensed transcript (first ~8 min + last ~2 min for context)
+    full_text = " ".join(w["word"] for w in words)
+    # Truncate to ~6000 chars to stay well within context limits
+    if len(full_text) > 6000:
+        full_text = full_text[:4500] + "\n\n[...middle trimmed...]\n\n" + full_text[-1500:]
+
+    prompt = f"""You are a YouTube content strategist. Given this transcript from a talking-head video about finance/stocks, generate metadata for publishing.
+
+TRANSCRIPT:
+{full_text}
+
+Respond with a JSON object ONLY — no markdown, no explanation:
+{{
+  "title": "Compelling YouTube title (50-70 chars, no clickbait)",
+  "description": "2-3 sentence description summarizing the key points. Write in third person. Include a call to action at the end.",
+  "tags": ["tag1", "tag2", "...up to 12 relevant tags for YouTube SEO"]
+}}"""
+
+    try:
+        import anthropic
+        text = anthropic.Anthropic(api_key=api_key).messages.create(
+            model="claude-sonnet-4-20250514",
+            max_tokens=1000,
+            messages=[{"role": "user", "content": prompt}],
+        ).content[0].text.strip()
+
+        match = re.search(r'\{[\s\S]*\}', text)
+        if match:
+            text = match.group(0)
+        result = json.loads(text)
+        if isinstance(result, dict) and "title" in result:
+            return result
+    except Exception as e:
+        print(f"  SnipCut: metadata generation failed: {e}")
+    return {}
+
+
 def snipcut_seconds_to_tc(seconds: float, fps: int = 30) -> str:
     """Convert seconds to HH:MM:SS:FF timecode for EDL."""
     total_frames = round(seconds * fps)
@@ -1713,6 +1756,9 @@ def snipcut_generate_clean_transcript(words: list, cuts: list, output_path: str)
     Path(output_path).write_text("\n".join(lines) + "\n")
 
 
+SNIPCUT_MODES = ("full", "silence_only")
+SNIPCUT_DECISIONS = ("pending", "keep", "cut")
+
 SNIPCUT_REASON_EMOJI = {
     "silence": "🔵",
     "filler": "🟡",
@@ -1880,28 +1926,68 @@ def snipcut_open_in_resolve(cfr_path: str, edl_path: str, project_name: str) -> 
 def snipcut_populate_markers_table(job_id: str, merged_cuts: list):
     """Insert one row into snipcut_markers per merged cut, all with decision='pending'.
     Clears any existing rows for this job first so retries produce a clean set."""
+    rows = []
+    for i, c in enumerate(merged_cuts):
+        try:
+            start = float(c.get("start", 0))
+            end = float(c.get("end", 0))
+        except (TypeError, ValueError):
+            continue
+        if end <= start:
+            continue
+        reason = (c.get("reason") or "cut").strip() or "cut"
+        content = (c.get("content") or "").strip()[:500]
+        rows.append((uuid.uuid4().hex[:12], job_id, i,
+                     round(start, 3), round(end, 3), reason, content))
+
     conn = get_db()
     try:
         conn.execute("DELETE FROM snipcut_markers WHERE job_id = ?", (job_id,))
-        for i, c in enumerate(merged_cuts):
-            try:
-                start = float(c.get("start", 0))
-                end = float(c.get("end", 0))
-            except (TypeError, ValueError):
-                continue
-            if end <= start:
-                continue
-            marker_id = uuid.uuid4().hex[:12]
-            reason = (c.get("reason") or "cut").strip() or "cut"
-            content = (c.get("content") or "").strip()
-            conn.execute(
-                "INSERT INTO snipcut_markers (id, job_id, sort_order, start_seconds, end_seconds, "
-                "reason, content, decision) VALUES (?, ?, ?, ?, ?, ?, ?, 'pending')",
-                (marker_id, job_id, i, round(start, 3), round(end, 3), reason, content[:500])
-            )
+        conn.executemany(
+            "INSERT INTO snipcut_markers (id, job_id, sort_order, start_seconds, end_seconds, "
+            "reason, content, decision) VALUES (?, ?, ?, ?, ?, ?, 'pending')",
+            rows
+        )
         conn.commit()
     finally:
         conn.close()
+
+
+def snipcut_finalize_outputs(job_id: str, input_path: str, cfr_output: str,
+                              ai_cuts: list, silence_gaps: list, words: list,
+                              duration: float, output_fps: int,
+                              write_transcript: bool = True) -> dict:
+    """Generate EDL + markers.txt + optional clean transcript for a processed job.
+    Re-probes CFR file for its real fps as a final safety check. Returns paths dict."""
+    try:
+        cfr_info = snipcut_probe(cfr_output)
+        actual_fps = round(cfr_info["fps"]) or output_fps
+        if actual_fps != output_fps:
+            print(f"  SnipCut: CFR file is {actual_fps}fps (expected {output_fps}) — using actual")
+            output_fps = actual_fps
+            _snipcut_update(job_id, output_fps=output_fps)
+    except Exception as e:
+        print(f"  SnipCut: couldn't re-probe CFR ({e}), using {output_fps}fps")
+
+    merged_cuts = snipcut_merge_cuts(ai_cuts, silence_gaps)
+    keeps = snipcut_compute_keeps(merged_cuts, duration)
+    title = Path(input_path).stem
+
+    edl_path = str(Path(cfr_output).with_suffix(".edl"))
+    snipcut_generate_edl(keeps, edl_path, title, fps=output_fps)
+
+    markers_path = str(Path(input_path).with_name(f"{title}_markers.txt"))
+    snipcut_generate_markers_txt(merged_cuts, markers_path, title, duration, fps=output_fps)
+
+    transcript_path = ""
+    if write_transcript and words:
+        transcript_path = str(Path(input_path).with_name(f"{title}_transcript.txt"))
+        snipcut_generate_clean_transcript(words, merged_cuts, transcript_path)
+
+    snipcut_populate_markers_table(job_id, merged_cuts)
+
+    return {"edl_path": edl_path, "markers_path": markers_path,
+            "transcript_path": transcript_path}
 
 
 def snipcut_process(job_id: str):
@@ -1959,11 +2045,10 @@ def snipcut_process(job_id: str):
                     except Exception:
                         pass
 
-            # Extract audio + run ffmpeg silencedetect. Skip transcription entirely.
             has_silence = job["silence_gaps_json"] and len(job["silence_gaps_json"]) > 2
             if has_silence:
                 silence_gaps = json.loads(job["silence_gaps_json"])
-                print(f"  SnipCut (silence-only): resuming — silence gaps exist ({len(silence_gaps)} gaps)")
+                print(f"  SnipCut (silence-only): resuming — {len(silence_gaps)} gaps exist")
             else:
                 _snipcut_update(job_id, status="detecting_silence", transcribe_progress=50.0)
                 snipcut_extract_audio(input_path, audio_path)
@@ -1974,39 +2059,15 @@ def snipcut_process(job_id: str):
                     try: os.remove(audio_path)
                     except OSError: pass
 
-            words = []
-            # No AI cuts — silence gaps provide all the marker data.
-            ai_cuts = []
-            _snipcut_update(job_id, cuts_json=json.dumps(ai_cuts))
-
-            # Jump straight to EDL + markers generation below.
-            _snipcut_update(job_id, status="generating_edl")
-
-            # Re-probe CFR to confirm fps
-            try:
-                cfr_info = snipcut_probe(cfr_output)
-                actual_fps = round(cfr_info["fps"]) or output_fps
-                if actual_fps != output_fps:
-                    output_fps = actual_fps
-                    _snipcut_update(job_id, output_fps=output_fps)
-            except Exception:
-                pass
-
-            merged_cuts = snipcut_merge_cuts(ai_cuts, silence_gaps)
-            keeps = snipcut_compute_keeps(merged_cuts, info["duration"])
-            edl_path = str(Path(cfr_output).with_suffix(".edl"))
-            title = Path(input_path).stem
-            snipcut_generate_edl(keeps, edl_path, title, fps=output_fps)
-
-            markers_path = str(Path(input_path).with_name(f"{title}_markers.txt"))
-            snipcut_generate_markers_txt(merged_cuts, markers_path, title,
-                                         info["duration"], fps=output_fps)
-
-            # Populate snipcut_markers rows for interactive review
-            snipcut_populate_markers_table(job_id, merged_cuts)
-
-            _snipcut_update(job_id, edl_path=edl_path, transcript_path="",
-                            markers_path=markers_path, status="done")
+            _snipcut_update(job_id, cuts_json="[]", status="generating_edl")
+            paths = snipcut_finalize_outputs(
+                job_id, input_path, cfr_output,
+                ai_cuts=[], silence_gaps=silence_gaps, words=[],
+                duration=info["duration"], output_fps=output_fps,
+                write_transcript=False,
+            )
+            _snipcut_update(job_id, edl_path=paths["edl_path"],
+                            markers_path=paths["markers_path"], status="done")
             return
 
         # ── Checkpoint: CFR + transcript ──
@@ -2097,49 +2158,30 @@ def snipcut_process(job_id: str):
             _snipcut_update(job_id, status="analyzing")
             api_key = load_config().get("api_key", "")
             result = snipcut_analyze(words, api_key)
-            ai_cuts = result.get("cuts", [])
-            # Snap cut boundaries to actual Whisper word edges so we never
-            # slice mid-word. Adds a 50ms breathing buffer on each side.
-            ai_cuts = snipcut_snap_cuts_to_words(ai_cuts, words)
+            # Snap to Whisper word edges with 50ms buffer so we never slice mid-word.
+            ai_cuts = snipcut_snap_cuts_to_words(result.get("cuts", []), words)
             _snipcut_update(job_id, cuts_json=json.dumps(ai_cuts),
                             analysis_reasoning=result.get("reasoning", ""))
 
-        # ── EDL + clean transcript (always regenerate — fast) ──
+        # ── Checkpoint: metadata (title/desc/tags) ──
+        has_metadata = job.get("metadata_json") and len(job.get("metadata_json", "")) > 10
+        if not has_metadata:
+            api_key = load_config().get("api_key", "")
+            metadata = snipcut_generate_metadata(words, api_key)
+            if metadata:
+                _snipcut_update(job_id, metadata_json=json.dumps(metadata))
+                print(f"  SnipCut: generated metadata — {metadata.get('title', '')[:60]}")
+
         _snipcut_update(job_id, status="generating_edl")
-
-        # Safeguard: re-probe the actual CFR file and use its real fps for the EDL.
-        # This guarantees EDL timecodes match the file, even if something upstream
-        # miscalculated (e.g. source was already CFR at 60fps).
-        try:
-            cfr_info = snipcut_probe(cfr_output)
-            actual_fps = round(cfr_info["fps"]) or output_fps
-            if actual_fps != output_fps:
-                print(f"  SnipCut: CFR file is {actual_fps}fps (expected {output_fps}) — using actual for EDL")
-                output_fps = actual_fps
-                _snipcut_update(job_id, output_fps=output_fps)
-        except Exception as e:
-            print(f"  SnipCut: couldn't re-probe CFR file ({e}), using {output_fps}fps for EDL")
-
-        merged_cuts = snipcut_merge_cuts(ai_cuts, silence_gaps)
-        keeps = snipcut_compute_keeps(merged_cuts, info["duration"])
-        edl_path = str(Path(cfr_output).with_suffix(".edl"))
-        title = Path(input_path).stem
-        snipcut_generate_edl(keeps, edl_path, title, fps=output_fps)
-
-        # Non-destructive marker list — preferred over the cuts EDL because
-        # small timing errors in the cuts don't matter when the user reviews manually.
-        markers_path = str(Path(input_path).with_name(f"{title}_markers.txt"))
-        snipcut_generate_markers_txt(merged_cuts, markers_path, title,
-                                      info["duration"], fps=output_fps)
-
-        transcript_path = str(Path(input_path).with_name(f"{title}_transcript.txt"))
-        snipcut_generate_clean_transcript(words, merged_cuts, transcript_path)
-
-        # Populate snipcut_markers rows for interactive review (all decision='pending')
-        snipcut_populate_markers_table(job_id, merged_cuts)
-
-        _snipcut_update(job_id, edl_path=edl_path, transcript_path=transcript_path,
-                        markers_path=markers_path, status="done")
+        paths = snipcut_finalize_outputs(
+            job_id, input_path, cfr_output,
+            ai_cuts=ai_cuts, silence_gaps=silence_gaps, words=words,
+            duration=info["duration"], output_fps=output_fps,
+            write_transcript=True,
+        )
+        _snipcut_update(job_id, edl_path=paths["edl_path"],
+                        transcript_path=paths["transcript_path"],
+                        markers_path=paths["markers_path"], status="done")
 
     except Exception as e:
         if os.path.exists(audio_path):
@@ -2752,7 +2794,7 @@ def api_snipcut_create():
         return jsonify({"error": "Only .mp4 files are supported"}), 400
 
     mode = (data.get("mode") or "full").strip()
-    if mode not in ("full", "silence_only"):
+    if mode not in SNIPCUT_MODES:
         mode = "full"
 
     # Check if already processed
@@ -2802,7 +2844,7 @@ def api_snipcut_list():
             "SELECT id, input_filename, status, error_text, duration_seconds, is_vfr, "
             "cfr_output_path, cfr_progress, transcribe_progress, cuts_json, "
             "analysis_reasoning, edl_path, resolve_status, transcript_path, output_fps, markers_path, "
-            "mode, refined_edl_path, refined_markers_path, created_at "
+            "mode, refined_edl_path, refined_markers_path, metadata_json, created_at "
             "FROM snipcut_jobs ORDER BY created_at DESC LIMIT 20"
         ).fetchall())
     finally:
@@ -2939,8 +2981,8 @@ def api_snipcut_marker_update(marker_id):
     """Update a single marker's decision."""
     data = request.json or {}
     decision = (data.get("decision") or "").strip()
-    if decision not in ("pending", "keep", "cut"):
-        return jsonify({"error": "decision must be pending|keep|cut"}), 400
+    if decision not in SNIPCUT_DECISIONS:
+        return jsonify({"error": f"decision must be one of {'|'.join(SNIPCUT_DECISIONS)}"}), 400
     conn = get_db()
     try:
         cur = conn.execute(
@@ -2968,7 +3010,7 @@ def api_snipcut_markers_bulk(job_id):
         for u in updates:
             mid = u.get("id")
             decision = u.get("decision")
-            if not mid or decision not in ("pending", "keep", "cut"):
+            if not mid or decision not in SNIPCUT_DECISIONS:
                 continue
             cur = conn.execute(
                 "UPDATE snipcut_markers SET decision = ? WHERE id = ? AND job_id = ?",
