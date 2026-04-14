@@ -1511,7 +1511,7 @@
     <div id="snipcutContent">
       <div id="snipcutDropZone" class="drop-zone">
         <div class="drop-zone-icon">&#127916;</div>
-        <div class="drop-zone-title">Choose an MP4 to process</div>
+        <div class="drop-zone-title">Drop an MP4 or browse to process</div>
         <div class="drop-zone-sub" id="snipcutDropZoneSub">StreamYard recording → CFR conversion + AI cut detection</div>
         <div class="snipcut-mode-toggle" style="display:flex;gap:6px;justify-content:center;margin-top:14px;">
           <button type="button" class="snipcut-mode-btn active" data-mode="full" onclick="snipcutSetMode('full')">Full AI</button>
@@ -3350,16 +3350,22 @@ function stopSnipcutPolling() {
     if (!dz) return;
     ['dragenter', 'dragover'].forEach(ev => dz.addEventListener(ev, (e) => { prevent(e); dz.classList.add('active'); }));
     ['dragleave', 'drop'].forEach(ev => dz.addEventListener(ev, (e) => { prevent(e); dz.classList.remove('active'); }));
-    dz.addEventListener('drop', (e) => {
+    dz.addEventListener('drop', async (e) => {
       const file = e.dataTransfer.files[0];
       if (!file) return;
-      // pywebview exposes file.path on native drops
-      const path = file.path || '';
-      if (!path) {
-        toast('No file path — pywebview may not expose it. Paste path manually.');
+      if (!file.name.toLowerCase().endsWith('.mp4')) {
+        toast('Only .mp4 files are supported');
         return;
       }
-      snipcutStartFromPath(path);
+      // pywebview exposes file.path on native macOS drops
+      const path = file.path || '';
+      if (path) {
+        snipcutStartFromPath(path);
+        return;
+      }
+      // Fallback: use the File object to resolve via a temp write,
+      // or prompt the user to use Browse instead
+      toast('Drag-drop path not available in this context — use Browse or paste path.');
     });
   });
 })();
