@@ -3350,23 +3350,18 @@ function stopSnipcutPolling() {
     if (!dz) return;
     ['dragenter', 'dragover'].forEach(ev => dz.addEventListener(ev, (e) => { prevent(e); dz.classList.add('active'); }));
     ['dragleave', 'drop'].forEach(ev => dz.addEventListener(ev, (e) => { prevent(e); dz.classList.remove('active'); }));
+    // Note: primary drop handling is done Python-side via pywebview's
+    // DOMEventHandler which has access to real file paths (pywebviewFullPath).
+    // This JS handler is a secondary fallback for the rare case where
+    // file.path is available directly (e.g. Electron-style runtimes).
     dz.addEventListener('drop', async (e) => {
       const file = e.dataTransfer.files[0];
       if (!file) return;
-      const videoExts = ['.mp4','.mkv','.mov','.webm','.avi','.ts','.mts','.flv','.m4v','.wmv'];
-      if (!videoExts.some(ext => file.name.toLowerCase().endsWith(ext))) {
-        toast('Unsupported format — drop a video file (.mp4, .mkv, .mov, etc.)');
-        return;
-      }
-      // pywebview exposes file.path on native macOS drops
       const path = file.path || '';
       if (path) {
         snipcutStartFromPath(path);
-        return;
       }
-      // Fallback: open native file picker so the user can select the same file
-      toast('Opening file picker…');
-      snipcutPickFile();
+      // If no path, the Python-side handler already took care of it.
     });
   });
 })();

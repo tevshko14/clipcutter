@@ -3234,7 +3234,51 @@ def main():
         resizable=True,
         min_size=(500, 600),
     )
-    webview.start()
+
+    def _bind_drop(win):
+        """Register native pywebview drop handler for real file paths."""
+        from webview.dom import DOMEventHandler
+        import requests
+
+        supported_exts = (".mp4", ".mkv", ".mov", ".webm", ".avi", ".ts",
+                          ".mts", ".flv", ".m4v", ".wmv")
+
+        def on_drag(e):
+            pass  # prevent default via DOMEventHandler flags
+
+        def on_drop(e):
+            files = e.get("dataTransfer", {}).get("files", [])
+            if not files:
+                return
+            path = files[0].get("pywebviewFullPath", "")
+            if not path:
+                return
+            if not path.lower().endswith(supported_exts):
+                win.evaluate_js("toast('Unsupported format')")
+                return
+            # Read the current mode from JS
+            mode = "full"
+            try:
+                mode = win.evaluate_js("currentSnipcutMode") or "full"
+            except Exception:
+                pass
+            try:
+                r = requests.post("http://127.0.0.1:5557/api/snipcut/jobs",
+                                  json={"input_path": path, "mode": mode}, timeout=10)
+                data = r.json()
+                if data.get("error"):
+                    win.evaluate_js(f"toast({json.dumps(data['error'])})")
+                else:
+                    win.evaluate_js("switchView('snipcut'); loadSnipcutJobs(); startSnipcutPolling()")
+            except Exception as ex:
+                print(f"  Drop handler error: {ex}")
+
+        doc = win.dom.document
+        doc.events.dragenter += DOMEventHandler(on_drag, True, True)
+        doc.events.dragover += DOMEventHandler(on_drag, True, True, debounce=500)
+        doc.events.drop += DOMEventHandler(on_drop, True, True)
+
+    webview.start(_bind_drop, window)
 
 
 if __name__ == "__main__":
