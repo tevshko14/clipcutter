@@ -191,6 +191,8 @@ def init_db():
         "ALTER TABLE snipcut_jobs ADD COLUMN refined_edl_path TEXT DEFAULT ''",
         "ALTER TABLE snipcut_jobs ADD COLUMN refined_markers_path TEXT DEFAULT ''",
         "ALTER TABLE snipcut_jobs ADD COLUMN metadata_json TEXT DEFAULT ''",
+        "ALTER TABLE snipcut_jobs ADD COLUMN srt_path TEXT DEFAULT ''",
+        "ALTER TABLE snipcut_jobs ADD COLUMN resolve_script TEXT DEFAULT ''",
     ]:
         try:
             conn.execute(migration)
@@ -1953,6 +1955,82 @@ def snipcut_populate_markers_table(job_id: str, merged_cuts: list):
         conn.close()
 
 
+def snipcut_generate_srt(merged_cuts: list, output_path: str):
+    """Generate an SRT subtitle file — one short entry per flagged moment.
+    Import into Resolve as a subtitle track for visual timeline markers."""
+    lines = []
+    for i, c in enumerate(merged_cuts, start=1):
+        start = c.get("start", 0)
+        end = c.get("end", 0)
+        # Clamp subtitle to 2 seconds max so it doesn't cover other content
+        sub_end = min(start + 2.0, end)
+        reason = (c.get("reason") or "cut").upper().replace("_", " ")
+        content = (c.get("content") or "").strip()
+        if reason == "SILENCE":
+            label = f"[SILENCE {end - start:.1f}s]"
+        elif content:
+            label = f"[{reason}] {content[:60]}"
+        else:
+            label = f"[{reason}]"
+        lines.append(str(i))
+        lines.append(f"{_srt_tc(start)} --> {_srt_tc(sub_end)}")
+        lines.append(label)
+        lines.append("")
+    Path(output_path).write_text("\n".join(lines), encoding="utf-8")
+
+
+def _srt_tc(seconds: float) -> str:
+    """Format seconds as SRT timecode: HH:MM:SS,mmm"""
+    h = int(seconds // 3600)
+    m = int((seconds % 3600) // 60)
+    s = int(seconds % 60)
+    ms = int((seconds % 1) * 1000)
+    return f"{h:02d}:{m:02d}:{s:02d},{ms:03d}"
+
+
+def snipcut_generate_resolve_script(merged_cuts: list, output_fps: int) -> str:
+    """Generate a Python script for Resolve's Console that adds native markers.
+    User pastes this into Workspace → Console to get real timeline markers."""
+    marker_lines = []
+    color_map = {
+        "silence": "Cyan",
+        "filler": "Yellow",
+        "repeated_take": "Red",
+        "merged": "Purple",
+        "cut": "Blue",
+    }
+    for c in merged_cuts:
+        start = c.get("start", 0)
+        end = c.get("end", 0)
+        reason = (c.get("reason") or "cut")
+        color = color_map.get(reason, "Blue")
+        duration_frames = max(1, round((end - start) * output_fps))
+        frame_id = round(start * output_fps)
+        content = (c.get("content") or "").strip().replace('"', '\\"')[:80]
+        name = reason.upper().replace("_", " ")
+        if reason == "silence":
+            note = f"gap {end - start:.1f}s"
+        else:
+            note = content or name
+        marker_lines.append(
+            f'tl.AddMarker({frame_id}, "{color}", "{name}", "{note}", {duration_frames})'
+        )
+
+    script = (
+        "# SnipCut markers — paste into Resolve Console (Workspace → Console)\n"
+        "resolve = bmd.scriptapp('Resolve')\n"  # noqa
+        "pm = resolve.GetProjectManager()\n"
+        "proj = pm.GetCurrentProject()\n"
+        "tl = proj.GetCurrentTimeline()\n"
+        "if tl:\n"
+    )
+    for line in marker_lines:
+        script += f"    {line}\n"
+    script += f'    print("Added {len(marker_lines)} markers")\n'
+    script += 'else:\n    print("No timeline open")\n'
+    return script
+
+
 def snipcut_finalize_outputs(job_id: str, input_path: str, cfr_output: str,
                               ai_cuts: list, silence_gaps: list, words: list,
                               duration: float, output_fps: int,
@@ -1984,10 +2062,16 @@ def snipcut_finalize_outputs(job_id: str, input_path: str, cfr_output: str,
         transcript_path = str(Path(input_path).with_name(f"{title}_transcript.txt"))
         snipcut_generate_clean_transcript(words, merged_cuts, transcript_path)
 
+    srt_path = str(Path(input_path).with_name(f"{title}_markers.srt"))
+    snipcut_generate_srt(merged_cuts, srt_path)
+
+    resolve_script = snipcut_generate_resolve_script(merged_cuts, output_fps)
+
     snipcut_populate_markers_table(job_id, merged_cuts)
 
     return {"edl_path": edl_path, "markers_path": markers_path,
-            "transcript_path": transcript_path}
+            "transcript_path": transcript_path, "srt_path": srt_path,
+            "resolve_script": resolve_script}
 
 
 def snipcut_process(job_id: str):
@@ -2067,7 +2151,10 @@ def snipcut_process(job_id: str):
                 write_transcript=False,
             )
             _snipcut_update(job_id, edl_path=paths["edl_path"],
-                            markers_path=paths["markers_path"], status="done")
+                            markers_path=paths["markers_path"],
+                            srt_path=paths["srt_path"],
+                            resolve_script=paths["resolve_script"],
+                            status="done")
             return
 
         # ── Checkpoint: CFR + transcript ──
@@ -2181,7 +2268,10 @@ def snipcut_process(job_id: str):
         )
         _snipcut_update(job_id, edl_path=paths["edl_path"],
                         transcript_path=paths["transcript_path"],
-                        markers_path=paths["markers_path"], status="done")
+                        markers_path=paths["markers_path"],
+                        srt_path=paths["srt_path"],
+                        resolve_script=paths["resolve_script"],
+                        status="done")
 
     except Exception as e:
         if os.path.exists(audio_path):
@@ -2844,7 +2934,8 @@ def api_snipcut_list():
             "SELECT id, input_filename, status, error_text, duration_seconds, is_vfr, "
             "cfr_output_path, cfr_progress, transcribe_progress, cuts_json, "
             "analysis_reasoning, edl_path, resolve_status, transcript_path, output_fps, markers_path, "
-            "mode, refined_edl_path, refined_markers_path, metadata_json, created_at "
+            "mode, refined_edl_path, refined_markers_path, metadata_json, "
+            "srt_path, resolve_script, created_at "
             "FROM snipcut_jobs ORDER BY created_at DESC LIMIT 20"
         ).fetchall())
     finally:

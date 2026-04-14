@@ -2910,6 +2910,17 @@ function snipcutCopyField(jobId, field) {
   } catch(e) { toast('Copy failed'); }
 }
 
+// Store resolve scripts by job ID for clipboard copy
+const _resolveScripts = {};
+
+function snipcutCopyResolveScript(jobId) {
+  const script = _resolveScripts[jobId];
+  if (!script) { toast('Script not available'); return; }
+  navigator.clipboard.writeText(script)
+    .then(() => toast('Resolve script copied — paste into Workspace → Console'))
+    .catch(() => toast('Copy failed'));
+}
+
 function snipcutRenderMetadata(j) {
   if (!j.metadata_json) return '';
   let meta;
@@ -2941,6 +2952,7 @@ function snipcutRenderMetadata(j) {
 }
 
 function renderSnipcutJobCard(j) {
+  if (j.resolve_script) _resolveScripts[j.id] = j.resolve_script;
   const durMin = j.duration_seconds ? (j.duration_seconds / 60).toFixed(1) : '—';
   const vfrBadge = j.is_vfr ? '<span class="clip-badge downloading" style="font-size:9px;">VFR → CFR</span>'
                              : '<span class="clip-badge ready" style="font-size:9px;">CFR</span>';
@@ -2977,6 +2989,8 @@ function renderSnipcutJobCard(j) {
         ${j.cfr_output_path ? `<button class="btn-ghost btn-sm" onclick="snipcutRevealFile('${(j.cfr_output_path).replace(/'/g, "\\'")}')" style="font-family:var(--mono);font-size:10px;" title="Reveal CFR file in Finder">CFR</button>` : ''}
         ${j.transcript_path ? `<button class="btn-ghost btn-sm" onclick="snipcutRevealFile('${(j.transcript_path).replace(/'/g, "\\'")}')" style="font-family:var(--mono);font-size:10px;" title="Reveal transcript in Finder">TXT</button>` : ''}
         ${j.markers_path ? `<button class="btn-ghost btn-sm" onclick="snipcutRevealFile('${(j.markers_path).replace(/'/g, "\\'")}')" style="font-family:var(--mono);font-size:10px;background:rgba(234,179,8,0.18);color:#eab308;" title="Reveal markers list">MARKERS</button>` : ''}
+        ${j.srt_path ? `<button class="btn-ghost btn-sm" onclick="snipcutRevealFile('${(j.srt_path).replace(/'/g, "\\'")}')" style="font-family:var(--mono);font-size:10px;background:rgba(59,130,246,0.18);color:#3b82f6;" title="SRT subtitle markers — drag onto Resolve timeline">SRT</button>` : ''}
+        ${j.resolve_script ? `<button class="btn-ghost btn-sm" onclick="snipcutCopyResolveScript('${j.id}')" style="font-family:var(--mono);font-size:10px;background:rgba(168,85,247,0.18);color:#a855f7;" title="Copy Python script for Resolve Console → Workspace → Console">COPY SCRIPT</button>` : ''}
       </div>
       ${resolveBanner}
       ${snipcutRenderMetadata(j)}
