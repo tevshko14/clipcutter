@@ -3364,9 +3364,9 @@ function stopSnipcutPolling() {
         snipcutStartFromPath(path);
         return;
       }
-      // Fallback: use the File object to resolve via a temp write,
-      // or prompt the user to use Browse instead
-      toast('Drag-drop path not available in this context — use Browse or paste path.');
+      // Fallback: open native file picker so the user can select the same file
+      toast('Opening file picker…');
+      snipcutPickFile();
     });
   });
 })();
