@@ -1511,7 +1511,7 @@
     <div id="snipcutContent">
       <div id="snipcutDropZone" class="drop-zone">
         <div class="drop-zone-icon">&#127916;</div>
-        <div class="drop-zone-title">Drop an MP4 or browse to process</div>
+        <div class="drop-zone-title">Drop a video file or browse to process</div>
         <div class="drop-zone-sub" id="snipcutDropZoneSub">StreamYard recording → CFR conversion + AI cut detection</div>
         <div class="snipcut-mode-toggle" style="display:flex;gap:6px;justify-content:center;margin-top:14px;">
           <button type="button" class="snipcut-mode-btn active" data-mode="full" onclick="snipcutSetMode('full')">Full AI</button>
@@ -3353,8 +3353,9 @@ function stopSnipcutPolling() {
     dz.addEventListener('drop', async (e) => {
       const file = e.dataTransfer.files[0];
       if (!file) return;
-      if (!file.name.toLowerCase().endsWith('.mp4')) {
-        toast('Only .mp4 files are supported');
+      const videoExts = ['.mp4','.mkv','.mov','.webm','.avi','.ts','.mts','.flv','.m4v','.wmv'];
+      if (!videoExts.some(ext => file.name.toLowerCase().endsWith(ext))) {
+        toast('Unsupported format — drop a video file (.mp4, .mkv, .mov, etc.)');
         return;
       }
       // pywebview exposes file.path on native macOS drops

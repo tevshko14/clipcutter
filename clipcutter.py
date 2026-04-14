@@ -2880,8 +2880,9 @@ def api_snipcut_create():
         return jsonify({"error": "input_path required"}), 400
     if not os.path.exists(input_path):
         return jsonify({"error": f"File not found: {input_path}"}), 400
-    if not input_path.lower().endswith(".mp4"):
-        return jsonify({"error": "Only .mp4 files are supported"}), 400
+    SUPPORTED_VIDEO_EXTS = (".mp4", ".mkv", ".mov", ".webm", ".avi", ".ts", ".mts", ".flv", ".m4v", ".wmv")
+    if not input_path.lower().endswith(SUPPORTED_VIDEO_EXTS):
+        return jsonify({"error": f"Unsupported format. Accepted: {', '.join(SUPPORTED_VIDEO_EXTS)}"}), 400
 
     mode = (data.get("mode") or "full").strip()
     if mode not in SNIPCUT_MODES:
@@ -2996,7 +2997,7 @@ def api_snipcut_pick_file():
         if windows:
             result = windows[0].create_file_dialog(
                 webview.OPEN_DIALOG,
-                file_types=("MP4 Video (*.mp4)",),
+                file_types=("Video Files (*.mp4;*.mkv;*.mov;*.webm;*.avi;*.ts;*.mts;*.flv;*.m4v;*.wmv)",),
             )
             if result and len(result) > 0:
                 return jsonify({"path": result[0]})
@@ -3208,7 +3209,7 @@ def main():
     # Check for file passed via sys.argv (right-click "Open With")
     if len(sys.argv) > 1:
         candidate = sys.argv[1]
-        if os.path.isfile(candidate) and candidate.lower().endswith(".mp4"):
+        if os.path.isfile(candidate) and any(candidate.lower().endswith(ext) for ext in (".mp4", ".mkv", ".mov", ".webm", ".avi", ".ts", ".mts", ".flv", ".m4v", ".wmv")):
             _pending_file["path"] = os.path.abspath(candidate)
             print(f"  Queued for SnipCut: {Path(candidate).name}")
 
