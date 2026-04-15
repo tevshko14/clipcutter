@@ -92,6 +92,8 @@ DEFAULT_CONFIG = {
     "whisper_model": "base",
     "output_dir": str(OUTPUT_DIR),
     "channel_profile": "",
+    "streambuddy_url": "",
+    "streambuddy_token": "",
 }
 
 def load_config():
@@ -2356,7 +2358,7 @@ def api_get_config():
 def api_update_config():
     config = load_config()
     data = request.json
-    for key in ["api_key", "default_clip_window", "target_duration", "whisper_model", "output_dir", "channel_profile"]:
+    for key in ["api_key", "default_clip_window", "target_duration", "whisper_model", "output_dir", "channel_profile", "streambuddy_url", "streambuddy_token"]:
         if key in data:
             config[key] = data[key]
     save_config(config)
@@ -3059,6 +3061,39 @@ def api_snipcut_pending_file():
     return jsonify({"path": None})
 
 
+@app.route("/api/pending-session")
+def api_pending_session():
+    """Return a pending session from clipcutter:// URL scheme (StreamBuddy handoff)."""
+    if _pending_session.get("youtube_url") and not _pending_session.get("consumed"):
+        payload = {
+            "youtube_url": _pending_session["youtube_url"],
+            "timestamps": _pending_session.get("timestamps", ""),
+            "title": _pending_session.get("title", ""),
+        }
+        _pending_session["consumed"] = True
+        return jsonify(payload)
+    return jsonify({"youtube_url": None})
+
+
+@app.route("/api/fetch-from-streambuddy", methods=["POST"])
+def api_fetch_from_streambuddy():
+    """Fetch the most recent ended session from StreamBuddy."""
+    data = request.json or {}
+    base_url = (data.get("base_url") or "").strip().rstrip("/")
+    token = (data.get("token") or "").strip()
+    if not base_url:
+        return jsonify({"error": "StreamBuddy URL not configured"}), 400
+    try:
+        import requests as _rq
+        headers = {"X-ClipCutter-Token": token} if token else {}
+        r = _rq.get(f"{base_url}/api/sessions/recent", headers=headers, timeout=10)
+        if r.status_code != 200:
+            return jsonify({"error": f"StreamBuddy returned {r.status_code}: {r.text[:200]}"}), 502
+        return jsonify(r.json())
+    except Exception as e:
+        return jsonify({"error": f"Fetch failed: {e}"}), 502
+
+
 @app.route("/api/snipcut/jobs/<job_id>/open-resolve", methods=["POST"])
 def api_snipcut_open_resolve(job_id):
     """Copy Lua setup script to clipboard and launch DaVinci Resolve."""
@@ -3236,6 +3271,57 @@ def api_snipcut_video(job_id):
 # Pending file from "Open With → ClipCutter" (or drag-drop onto .app)
 _pending_file = {"path": None, "consumed": False}
 
+# Pending session from clipcutter:// URL scheme (StreamBuddy integration)
+_pending_session = {"youtube_url": None, "timestamps": None, "title": None, "consumed": False}
+
+
+def _parse_clipcutter_url(url: str) -> dict:
+    """Parse a clipcutter:// URL into a session payload.
+    Expected formats:
+      clipcutter://session?url=<youtube>&timestamps=<base64_json>&title=<t>
+      clipcutter://session?url=<youtube>&timestamps=<urlencoded_plain_text>
+    """
+    from urllib.parse import urlparse, parse_qs, unquote
+    import base64
+
+    try:
+        parsed = urlparse(url)
+        if parsed.scheme != "clipcutter":
+            return {}
+        qs = parse_qs(parsed.query)
+        yt = (qs.get("url") or [""])[0]
+        title = (qs.get("title") or [""])[0]
+        ts_raw = (qs.get("timestamps") or [""])[0]
+        timestamps = ""
+        if ts_raw:
+            # Try base64 JSON first, fall back to plain text
+            try:
+                decoded = base64.b64decode(ts_raw).decode("utf-8")
+                # If it parses as JSON, format each entry as "H:MM:SS - note"
+                try:
+                    data = json.loads(decoded)
+                    if isinstance(data, list):
+                        lines = []
+                        for item in data:
+                            secs = int(item.get("elapsed_seconds", 0))
+                            h = secs // 3600
+                            m = (secs % 3600) // 60
+                            s = secs % 60
+                            tc = f"{h}:{m:02d}:{s:02d}" if h else f"{m}:{s:02d}"
+                            note = item.get("note", "")
+                            lines.append(f"{tc} - {note}" if note else tc)
+                        timestamps = "\n".join(lines)
+                    else:
+                        timestamps = decoded
+                except json.JSONDecodeError:
+                    timestamps = decoded
+            except Exception:
+                timestamps = unquote(ts_raw)
+        return {"youtube_url": yt, "timestamps": timestamps, "title": title}
+    except Exception as e:
+        print(f"  URL parse error: {e}")
+        return {}
+
 
 def start_server():
     """Run Flask in a background thread."""
@@ -3250,10 +3336,16 @@ def main():
     if not CONFIG_PATH.exists():
         save_config(DEFAULT_CONFIG)
 
-    # Check for file passed via sys.argv (right-click "Open With")
+    # Check for file or URL scheme passed via sys.argv
     if len(sys.argv) > 1:
         candidate = sys.argv[1]
-        if os.path.isfile(candidate) and any(candidate.lower().endswith(ext) for ext in (".mp4", ".mkv", ".mov", ".webm", ".avi", ".ts", ".mts", ".flv", ".m4v", ".wmv")):
+        if candidate.startswith("clipcutter://"):
+            session = _parse_clipcutter_url(candidate)
+            if session.get("youtube_url"):
+                _pending_session.update(session)
+                _pending_session["consumed"] = False
+                print(f"  Queued StreamBuddy session: {session.get('title') or session['youtube_url']}")
+        elif os.path.isfile(candidate) and any(candidate.lower().endswith(ext) for ext in (".mp4", ".mkv", ".mov", ".webm", ".avi", ".ts", ".mts", ".flv", ".m4v", ".wmv")):
             _pending_file["path"] = os.path.abspath(candidate)
             print(f"  Queued for SnipCut: {Path(candidate).name}")
 

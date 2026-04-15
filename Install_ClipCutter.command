@@ -136,15 +136,28 @@ cat > "$APP_PATH/Contents/Info.plist" << PLIST
     <array>
       <dict>
         <key>CFBundleTypeName</key>
-        <string>MPEG-4 Video</string>
+        <string>Video File</string>
         <key>CFBundleTypeRole</key>
         <string>Viewer</string>
         <key>LSItemContentTypes</key>
         <array>
           <string>public.mpeg-4</string>
+          <string>public.movie</string>
+          <string>public.video</string>
         </array>
         <key>LSHandlerRank</key>
         <string>Alternate</string>
+      </dict>
+    </array>
+    <key>CFBundleURLTypes</key>
+    <array>
+      <dict>
+        <key>CFBundleURLName</key>
+        <string>ClipCutter Session</string>
+        <key>CFBundleURLSchemes</key>
+        <array>
+          <string>clipcutter</string>
+        </array>
       </dict>
     </array>
 </dict>

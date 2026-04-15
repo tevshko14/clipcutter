@@ -1455,6 +1455,9 @@
       <button id="pasteToggle" onclick="togglePasteSection()" class="btn-ghost btn-sm" style="font-family:var(--mono);font-size:10px;text-transform:uppercase;letter-spacing:1px;color:var(--text-dimmer);padding:6px 12px;">
         &#128203; Paste timestamps instead
       </button>
+      <button id="fetchSbBtn" onclick="fetchFromStreamBuddy()" class="btn-ghost btn-sm" style="font-family:var(--mono);font-size:10px;text-transform:uppercase;letter-spacing:1px;color:var(--text-dimmer);padding:6px 12px;margin-left:6px;">
+        &#128229; Fetch from StreamBuddy
+      </button>
       <div id="pasteSection" style="display:none;margin-top:12px;">
         <div class="field">
           <label>Timestamps</label>
@@ -1591,6 +1594,16 @@
         <label>Target short duration (secs)</label>
         <input type="number" id="settingsTargetDuration" value="60" min="15" max="180">
       </div>
+      <div class="field">
+        <label>StreamBuddy URL</label>
+        <input type="text" id="settingsStreambuddyUrl" placeholder="https://streambuddy.yourhost.app">
+        <div class="hint">Base URL of your StreamBuddy instance (for Fetch from StreamBuddy)</div>
+      </div>
+      <div class="field">
+        <label>StreamBuddy Token (optional)</label>
+        <input type="password" id="settingsStreambuddyToken" placeholder="leave blank if not set">
+        <div class="hint">Shared secret sent as X-ClipCutter-Token header</div>
+      </div>
       <div class="modal-actions">
         <button class="btn-ghost btn-sm" onclick="closeSettings()">Cancel</button>
         <button class="btn-primary btn-sm" onclick="saveSettings()">Save</button>
@@ -1696,8 +1709,27 @@ function switchView(name) {
       toast('Starting SnipCut job…');
       snipcutStartFromPath(pendingData.path);
     }
+
+    // Check for a pending session from clipcutter:// URL (StreamBuddy handoff)
+    const sessionRes = await fetch('/api/pending-session');
+    const sessionData = await sessionRes.json();
+    if (sessionData.youtube_url) {
+      populatePendingSession(sessionData);
+    }
   } catch(e) {}
 })();
+
+function populatePendingSession(session) {
+  const urlField = $('url');
+  const pasteField = $('pasteTimestamps');
+  const section = $('pasteSection');
+  if (urlField) urlField.value = session.youtube_url || '';
+  if (pasteField) pasteField.value = session.timestamps || '';
+  if (section) section.style.display = 'block';
+  switchView('home');
+  const label = session.title ? `: ${session.title}` : '';
+  toast(`StreamBuddy session loaded${label} — click Start Clipping`, 6000);
+}
 
 function loadRecentSessions(sessions) {
   const el = $('recentSection');
@@ -1730,6 +1762,33 @@ function togglePasteSection() {
   const section = $('pasteSection');
   if (!section) return;
   section.style.display = section.style.display === 'none' ? 'block' : 'none';
+}
+
+async function fetchFromStreamBuddy() {
+  const btn = $('fetchSbBtn');
+  if (btn) { btn.disabled = true; btn.textContent = 'Fetching…'; }
+  try {
+    const cfg = await (await fetch('/api/config')).json();
+    const baseUrl = cfg.streambuddy_url || '';
+    const token = cfg.streambuddy_token || '';
+    if (!baseUrl) {
+      toast('Set StreamBuddy URL in Settings first');
+      return;
+    }
+    const r = await fetch('/api/fetch-from-streambuddy', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({base_url: baseUrl, token}),
+    });
+    const d = await r.json();
+    if (d.error) { toast(d.error); return; }
+    if (!d.youtube_url) { toast('No recent session found'); return; }
+    populatePendingSession(d);
+  } catch(e) {
+    toast('Fetch failed');
+  } finally {
+    if (btn) { btn.disabled = false; btn.innerHTML = '&#128229; Fetch from StreamBuddy'; }
+  }
 }
 
 async function startSessionWithTimestamps() {
@@ -3485,6 +3544,8 @@ async function openSettings() {
     $('settingsChannelProfile').value = config.channel_profile || '';
     $('settingsClipWindow').value = config.default_clip_window || 5;
     $('settingsTargetDuration').value = config.target_duration || 60;
+    $('settingsStreambuddyUrl').value = config.streambuddy_url || '';
+    $('settingsStreambuddyToken').value = config.streambuddy_token || '';
   } catch(e) {}
   $('settingsModal').classList.add('show');
 }
@@ -3498,6 +3559,8 @@ async function saveSettings() {
     default_clip_window: parseInt($('settingsClipWindow').value) || 5,
     target_duration: parseInt($('settingsTargetDuration').value) || 60,
     channel_profile: $('settingsChannelProfile').value.trim(),
+    streambuddy_url: $('settingsStreambuddyUrl').value.trim(),
+    streambuddy_token: $('settingsStreambuddyToken').value.trim(),
   };
   const apiKey = $('settingsApiKey').value.trim();
   if (apiKey) updates.api_key = apiKey;
