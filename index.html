@@ -1851,12 +1851,14 @@ function renderSbPickerList(sessions) {
   }
   el.innerHTML = sessions.map((s, i) => {
     const date = s.ended_at ? new Date(s.ended_at).toLocaleDateString('en-US', {month:'short', day:'numeric', year:'numeric'}) : '';
+    const noUrlHint = s.youtube_url ? '' : '<span style="color:var(--yellow);">· no URL (paste manually)</span>';
     return `
       <div class="sb-session-row" onclick="pickSbSession(${i})">
         <div class="sb-session-title">${esc(s.title || 'Untitled')}</div>
         <div class="sb-session-meta">
           <span>${esc(date)}</span>
           <span class="shorts">${s.shorts_count} shorts</span>
+          ${noUrlHint}
         </div>
       </div>`;
   }).join('');
