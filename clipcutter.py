@@ -498,21 +498,27 @@ def download_clip(clip_id: str, url: str):
         ]
 
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
-        if result.returncode != 0 and ("Could not open encoder" in (result.stderr or "") or "aac" in (result.stderr or "").lower()):
-            # AAC encoder failure — common on long streams with audio
-            # discontinuities. Retry: drop forced keyframes, use best single
-            # format (no merge), and tell ffmpeg to copy audio codec.
-            print(f"  Retrying download (AAC encoder error): no keyframe forcing, audio copy")
-            cmd_retry = [
-                *get_ytdlp_cmd(),
-                "--download-sections", section_arg,
-                "-f", "best[height<=1080][ext=mp4]/best",
-                "--postprocessor-args", "ffmpeg:-c:a copy",
-                "-o", str(output_path),
-                "--no-playlist",
-                url,
-            ]
-            result = subprocess.run(cmd_retry, capture_output=True, text=True, timeout=600)
+        combined_output = (result.stdout or "") + (result.stderr or "")
+        if result.returncode != 0:
+            print(f"  Download failed (rc={result.returncode}). Output tail: {combined_output[-300:]}")
+            if "could not open encoder" in combined_output.lower() or "aac" in combined_output.lower():
+                # AAC encoder failure — retry with simpler download approach
+                print(f"  Retrying: single-format download, no keyframe forcing")
+                # Clean up partial file from failed attempt
+                if output_path.exists():
+                    try: output_path.unlink()
+                    except OSError: pass
+                cmd_retry = [
+                    *get_ytdlp_cmd(),
+                    "--download-sections", section_arg,
+                    "-f", "best[height<=1080][ext=mp4]/best",
+                    "--no-playlist",
+                    "-o", str(output_path),
+                    url,
+                ]
+                result = subprocess.run(cmd_retry, capture_output=True, text=True, timeout=600)
+                if result.returncode != 0:
+                    print(f"  Retry also failed: {(result.stdout or '')[-200:]}{(result.stderr or '')[-200:]}")
 
         if result.returncode == 0:
             conn.execute(
