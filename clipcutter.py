@@ -3082,16 +3082,26 @@ def api_fetch_from_streambuddy():
     base_url = (data.get("base_url") or "").strip().rstrip("/")
     token = (data.get("token") or "").strip()
     if not base_url:
-        return jsonify({"error": "StreamBuddy URL not configured"}), 400
+        return jsonify({"error": "StreamBuddy URL not configured in Settings"}), 400
+    if not base_url.startswith(("http://", "https://")):
+        base_url = "https://" + base_url
+    endpoint = f"{base_url}/api/sessions/recent"
     try:
         import requests as _rq
         headers = {"X-ClipCutter-Token": token} if token else {}
-        r = _rq.get(f"{base_url}/api/sessions/recent", headers=headers, timeout=10)
+        r = _rq.get(endpoint, headers=headers, timeout=10)
+        # Detect HTML responses (404 pages, error pages) instead of JSON
+        content_type = r.headers.get("content-type", "")
+        if "application/json" not in content_type:
+            msg = f"{endpoint} returned {r.status_code} ({content_type or 'no content-type'})."
+            if r.status_code == 404:
+                msg += " Endpoint not deployed yet — wait for Railway to redeploy or verify the URL."
+            return jsonify({"error": msg}), 502
         if r.status_code != 200:
             return jsonify({"error": f"StreamBuddy returned {r.status_code}: {r.text[:200]}"}), 502
         return jsonify(r.json())
     except Exception as e:
-        return jsonify({"error": f"Fetch failed: {e}"}), 502
+        return jsonify({"error": f"Fetch failed for {endpoint}: {e}"}), 502
 
 
 @app.route("/api/snipcut/jobs/<job_id>/open-resolve", methods=["POST"])
