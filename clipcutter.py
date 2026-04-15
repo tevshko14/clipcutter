@@ -498,6 +498,22 @@ def download_clip(clip_id: str, url: str):
         ]
 
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+        if result.returncode != 0 and "Could not open encoder" in (result.stderr or ""):
+            # Retry without --force-keyframes-at-cuts which triggers
+            # ffmpeg AAC re-encoding. Less precise cuts but avoids
+            # encoder failures on streams with audio discontinuities.
+            print(f"  Retrying download without forced keyframes (AAC encoder error)")
+            cmd_retry = [
+                *get_ytdlp_cmd(),
+                "--download-sections", section_arg,
+                "-f", "bestvideo[height<=1080][ext=mp4]+bestaudio[ext=m4a]/best[height<=1080][ext=mp4]/best",
+                "--merge-output-format", "mp4",
+                "-o", str(output_path),
+                "--no-playlist",
+                url,
+            ]
+            result = subprocess.run(cmd_retry, capture_output=True, text=True, timeout=600)
+
         if result.returncode == 0:
             conn.execute(
                 "UPDATE clips SET status = 'downloaded', raw_file = ? WHERE id = ?",
