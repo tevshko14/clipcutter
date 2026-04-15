@@ -913,6 +913,28 @@
     max-height: 85vh;
     overflow-y: auto;
   }
+  .sb-session-row {
+    display: flex; flex-direction: column; gap: 3px;
+    padding: 12px 14px; cursor: pointer;
+    background: var(--surface-2); border: 1px solid var(--border);
+    border-radius: 8px; margin-bottom: 6px;
+    transition: border-color 0.12s, background 0.12s;
+  }
+  .sb-session-row:hover {
+    border-color: var(--accent);
+    background: var(--surface-3);
+  }
+  .sb-session-title {
+    font-size: 13px; color: var(--text); font-weight: 500;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .sb-session-meta {
+    font-family: var(--mono); font-size: 10px; color: var(--text-dim);
+    display: flex; gap: 10px;
+  }
+  .sb-session-meta .shorts {
+    color: var(--accent);
+  }
   .modal-title {
     font-family: var(--mono);
     font-size: 10px;
@@ -1610,6 +1632,19 @@
       </div>
     </div>
   </div>
+
+  <!-- StreamBuddy session picker modal -->
+  <div class="modal-overlay" id="sbPickerModal">
+    <div class="modal" style="max-width:520px;">
+      <div class="modal-title">Pick a StreamBuddy session</div>
+      <div id="sbPickerList" style="max-height:420px;overflow-y:auto;margin:-4px -4px 12px -4px;padding:0 4px;">
+        <div style="color:var(--text-dim);font-size:12px;padding:20px;text-align:center;">Loading…</div>
+      </div>
+      <div class="modal-actions">
+        <button class="btn-ghost btn-sm" onclick="closeSbPicker()">Cancel</button>
+      </div>
+    </div>
+  </div>
 </div>
 
 <script>
@@ -1764,15 +1799,19 @@ function togglePasteSection() {
   section.style.display = section.style.display === 'none' ? 'block' : 'none';
 }
 
+let _sbSessions = [];
+
 async function fetchFromStreamBuddy() {
   const btn = $('fetchSbBtn');
   if (btn) { btn.disabled = true; btn.textContent = 'Fetching…'; }
+  openSbPicker();
   try {
     const cfg = await (await fetch('/api/config')).json();
     const baseUrl = cfg.streambuddy_url || '';
     const token = cfg.streambuddy_token || '';
     if (!baseUrl) {
       toast('Set StreamBuddy URL in Settings first');
+      closeSbPicker();
       return;
     }
     const r = await fetch('/api/fetch-from-streambuddy', {
@@ -1781,14 +1820,57 @@ async function fetchFromStreamBuddy() {
       body: JSON.stringify({base_url: baseUrl, token}),
     });
     const d = await r.json();
-    if (d.error) { toast(d.error); return; }
-    if (!d.youtube_url) { toast('No recent session found'); return; }
-    populatePendingSession(d);
+    if (d.error) {
+      $('sbPickerList').innerHTML = `<div style="color:var(--red);font-size:12px;padding:20px;text-align:center;">${esc(d.error)}</div>`;
+      return;
+    }
+    const sessions = d.sessions || [];
+    _sbSessions = sessions;
+    renderSbPickerList(sessions);
   } catch(e) {
-    toast('Fetch failed');
+    $('sbPickerList').innerHTML = `<div style="color:var(--red);font-size:12px;padding:20px;text-align:center;">Fetch failed: ${esc(String(e))}</div>`;
   } finally {
     if (btn) { btn.disabled = false; btn.innerHTML = '&#128229; Fetch from StreamBuddy'; }
   }
+}
+
+function openSbPicker() {
+  $('sbPickerModal').classList.add('show');
+  $('sbPickerList').innerHTML = '<div style="color:var(--text-dim);font-size:12px;padding:20px;text-align:center;">Loading…</div>';
+}
+
+function closeSbPicker() {
+  $('sbPickerModal').classList.remove('show');
+}
+
+function renderSbPickerList(sessions) {
+  const el = $('sbPickerList');
+  if (!sessions || sessions.length === 0) {
+    el.innerHTML = '<div style="color:var(--text-dim);font-size:12px;padding:20px;text-align:center;">No past sessions with shorts found</div>';
+    return;
+  }
+  el.innerHTML = sessions.map((s, i) => {
+    const date = s.ended_at ? new Date(s.ended_at).toLocaleDateString('en-US', {month:'short', day:'numeric', year:'numeric'}) : '';
+    return `
+      <div class="sb-session-row" onclick="pickSbSession(${i})">
+        <div class="sb-session-title">${esc(s.title || 'Untitled')}</div>
+        <div class="sb-session-meta">
+          <span>${esc(date)}</span>
+          <span class="shorts">${s.shorts_count} shorts</span>
+        </div>
+      </div>`;
+  }).join('');
+}
+
+function pickSbSession(index) {
+  const s = _sbSessions[index];
+  if (!s) return;
+  closeSbPicker();
+  populatePendingSession({
+    youtube_url: s.youtube_url,
+    title: s.title,
+    timestamps: s.timestamps,
+  });
 }
 
 async function startSessionWithTimestamps() {
