@@ -1023,7 +1023,9 @@ def export_clip(clip_id: str, captions: bool = True, vertical: bool = True):
 
         cmd += [
             "-c:v", "libx264", "-preset", "fast", "-crf", "20",
+            "-r", "30",
             "-c:a", "aac", "-b:a", "192k",
+            "-movflags", "+faststart",
             str(output_path),
         ]
 
