@@ -489,7 +489,9 @@ def download_clip(clip_id: str, url: str):
         cmd = [
             *get_ytdlp_cmd(),
             "--download-sections", section_arg,
-            "-f", "bestvideo[height<=1080][ext=mp4]+bestaudio[ext=m4a]/best[height<=1080][ext=mp4]/best",
+            # Prefer single pre-muxed MP4 (no merge step = faster).
+            # Falls back to separate streams + merge if pre-muxed unavailable.
+            "-f", "best[height<=1080][ext=mp4]/bestvideo[height<=1080][ext=mp4]+bestaudio[ext=m4a]/best",
             "--merge-output-format", "mp4",
             "-o", str(output_path),
             "--no-playlist",
