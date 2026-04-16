@@ -1489,7 +1489,17 @@
 45:00 - Viewer Q&A" style="min-height:100px;"></textarea>
           <div class="hint">One per line: <code>timestamp - note</code>. Copied from ClipCutter Live's "Potential Shorts" section.</div>
         </div>
-        <div class="btn-row">
+        <div id="localFileSection" style="margin-top:12px;padding:14px 16px;border:1px dashed var(--border);border-radius:8px;background:var(--surface-2);text-align:center;">
+          <div style="font-size:12px;color:var(--text-dim);margin-bottom:8px;" id="localFileLabel">Or use a local recording (skips YouTube download)</div>
+          <div style="display:flex;gap:8px;justify-content:center;align-items:center;">
+            <button class="btn-ghost btn-sm" onclick="pickLocalFile()" style="font-size:11px;">&#128193; Browse video file</button>
+            <span id="localFileStatus" style="font-family:var(--mono);font-size:10px;color:var(--text-dimmer);"></span>
+          </div>
+          <div id="localFileClear" style="display:none;margin-top:6px;">
+            <button class="btn-ghost btn-sm" onclick="clearLocalFile()" style="font-size:10px;color:var(--red);">&#10005; Remove file</button>
+          </div>
+        </div>
+        <div class="btn-row" style="margin-top:12px;">
           <button class="btn-primary" id="pasteStartBtn" onclick="startSessionWithTimestamps()">&#9986; Start Clipping</button>
         </div>
       </div>
@@ -1761,9 +1771,13 @@ function populatePendingSession(session) {
   if (urlField) urlField.value = session.youtube_url || '';
   if (pasteField) pasteField.value = session.timestamps || '';
   if (section) section.style.display = 'block';
+  clearLocalFile();
   switchView('home');
   const label = session.title ? `: ${session.title}` : '';
-  toast(`StreamBuddy session loaded${label} — click Start Clipping`, 6000);
+  const hint = session.youtube_url
+    ? 'Use the YouTube URL or browse a local file below'
+    : 'Browse a local file below (no YouTube URL)';
+  toast(`StreamBuddy session loaded${label} — ${hint}`, 6000);
 }
 
 function loadRecentSessions(sessions) {
@@ -1793,10 +1807,37 @@ function loadRecentSessions(sessions) {
   el.style.display = 'block';
 }
 
+let localFilePath = '';
+
 function togglePasteSection() {
   const section = $('pasteSection');
   if (!section) return;
   section.style.display = section.style.display === 'none' ? 'block' : 'none';
+}
+
+async function pickLocalFile() {
+  try {
+    const r = await fetch('/api/snipcut/pick-file', { method: 'POST' });
+    const d = await r.json();
+    if (d.error) { toast(d.error); return; }
+    if (d.cancelled || !d.path) return;
+    localFilePath = d.path;
+    $('localFileStatus').textContent = d.path.split('/').pop();
+    $('localFileClear').style.display = 'block';
+    // URL becomes optional when file is selected
+    $('url').placeholder = 'Optional — have local file';
+    $('localFileLabel').textContent = '✓ Local file selected (will skip YouTube download)';
+    $('localFileLabel').style.color = 'var(--green)';
+  } catch(e) { toast('File picker failed'); }
+}
+
+function clearLocalFile() {
+  localFilePath = '';
+  $('localFileStatus').textContent = '';
+  $('localFileClear').style.display = 'none';
+  $('url').placeholder = 'https://www.youtube.com/watch?v=...';
+  $('localFileLabel').textContent = 'Or use a local recording (skips YouTube download)';
+  $('localFileLabel').style.color = 'var(--text-dim)';
 }
 
 let _sbSessions = [];
@@ -1878,18 +1919,18 @@ function pickSbSession(index) {
 async function startSessionWithTimestamps() {
   const url = $('url').value.trim();
   const text = $('pasteTimestamps').value.trim();
-  if (!url) { toast('Enter a YouTube URL'); return; }
+  if (!url && !localFilePath) { toast('Enter a YouTube URL or select a local file'); return; }
   if (!text) { toast('Paste some timestamps'); return; }
 
   const btn = $('pasteStartBtn');
   btn.disabled = true;
-  btn.textContent = 'Starting...';
+  btn.textContent = localFilePath ? 'Extracting clips…' : 'Starting...';
 
   try {
     const r = await fetch('/api/sessions', {
       method: 'POST',
       headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({url, text}),
+      body: JSON.stringify({url, text, local_file: localFilePath}),
     });
     const d = await r.json();
     if (d.error) { toast(d.error); return; }
@@ -1897,6 +1938,7 @@ async function startSessionWithTimestamps() {
     currentSessionId = d.session_id;
     $('url').value = '';
     $('pasteTimestamps').value = '';
+    clearLocalFile();
     $('pasteSection').style.display = 'none';
     switchView('clips');
     startPolling(d.session_id);
@@ -3496,6 +3538,29 @@ function stopSnipcutPolling() {
     });
   });
 })();
+
+// Wire drag-drop on the local file section
+document.addEventListener('DOMContentLoaded', () => {
+  const lfs = $('localFileSection');
+  if (!lfs) return;
+  ['dragenter', 'dragover'].forEach(ev => lfs.addEventListener(ev, (e) => { e.preventDefault(); e.stopPropagation(); lfs.style.borderColor = 'var(--accent)'; }));
+  ['dragleave', 'drop'].forEach(ev => lfs.addEventListener(ev, (e) => { e.preventDefault(); e.stopPropagation(); lfs.style.borderColor = 'var(--border)'; }));
+  lfs.addEventListener('drop', (e) => {
+    const file = e.dataTransfer && e.dataTransfer.files[0];
+    if (!file) return;
+    if (file.path) {
+      localFilePath = file.path;
+      $('localFileStatus').textContent = file.name;
+      $('localFileClear').style.display = 'block';
+      $('url').placeholder = 'Optional — have local file';
+      $('localFileLabel').textContent = '✓ Local file selected (will skip YouTube download)';
+      $('localFileLabel').style.color = 'var(--green)';
+    } else {
+      toast('Opening file picker…');
+      pickLocalFile();
+    }
+  });
+});
 
 // ── History ──
 let historyExpandedGroups = new Set(); // track which sessions are expanded

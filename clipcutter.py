@@ -555,6 +555,65 @@ def download_clip(clip_id: str, url: str):
             conn.close()
 
 
+def extract_clip_local(clip_id: str, source_path: str):
+    """Extract a clip segment from a local video file using ffmpeg -c copy.
+    Instant (no re-encoding). Chains to transcription on success."""
+    conn = get_db()
+    try:
+        clip = row_to_dict(conn.execute(
+            "SELECT id, session_id, note, start_seconds, end_seconds FROM clips WHERE id = ?",
+            (clip_id,)
+        ).fetchone())
+        if not clip:
+            return
+
+        conn.execute("UPDATE clips SET status = 'downloading' WHERE id = ?", (clip_id,))
+        conn.commit()
+
+        session_dir = SESSIONS_DIR / clip["session_id"] / "raw"
+        session_dir.mkdir(parents=True, exist_ok=True)
+
+        safe_note = sanitize_note(clip["note"] or "clip")
+        output_path = session_dir / f"{safe_note}_{clip_id[:6]}.mp4"
+
+        cmd = [
+            "ffmpeg", "-y",
+            "-ss", str(clip["start_seconds"]),
+            "-to", str(clip["end_seconds"]),
+            "-i", source_path,
+            "-c", "copy",
+            "-movflags", "+faststart",
+            str(output_path),
+        ]
+
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+        if result.returncode == 0 and output_path.exists():
+            conn.execute(
+                "UPDATE clips SET status = 'downloaded', raw_file = ? WHERE id = ?",
+                (str(output_path), clip_id)
+            )
+            conn.commit()
+            conn.close()
+            transcribe_clip(clip_id)
+        else:
+            error_msg = (result.stderr or "ffmpeg extraction failed")[-300:]
+            conn.execute(
+                "UPDATE clips SET status = 'error', error_text = ? WHERE id = ?",
+                (error_msg, clip_id)
+            )
+            conn.commit()
+            conn.close()
+    except Exception as exc:
+        try:
+            conn.execute(
+                "UPDATE clips SET status = 'error', error_text = ? WHERE id = ?",
+                (f"Extraction failed: {str(exc)[:300]}", clip_id)
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+
 def gather_session(session_id: str):
     """Phase B: create clip records from selected suggestions, start parallel downloads."""
     conn = get_db()
@@ -2394,8 +2453,13 @@ def api_create_session():
     data = request.json
     url = data.get("url", "").strip()
     text = data.get("text", "").strip()
-    if not url:
-        return jsonify({"error": "YouTube URL is required"}), 400
+    local_file = data.get("local_file", "").strip().strip("'\"")
+
+    # Need either a URL or a local file (local file mode skips yt-dlp entirely)
+    if not url and not local_file:
+        return jsonify({"error": "YouTube URL or local file required"}), 400
+    if local_file and not os.path.exists(local_file):
+        return jsonify({"error": f"File not found: {local_file}"}), 400
 
     session_id = uuid.uuid4().hex[:12]
     config = load_config()
@@ -2411,7 +2475,7 @@ def api_create_session():
         try:
             conn.execute(
                 "INSERT INTO sessions (id, youtube_url, gather_phase) VALUES (?, ?, 'collecting')",
-                (session_id, url)
+                (session_id, url or "")
             )
             clip_ids = []
             for clip in parsed:
@@ -2428,11 +2492,17 @@ def api_create_session():
         finally:
             conn.close()
 
-        # Parallel downloads
-        for clip_id in clip_ids:
-            threading.Thread(target=download_clip, args=(clip_id, url), daemon=True).start()
+        if local_file:
+            # Local file mode: extract clips with ffmpeg (~1s each, no download)
+            for clip_id in clip_ids:
+                threading.Thread(target=extract_clip_local, args=(clip_id, local_file), daemon=True).start()
+        else:
+            # URL mode: download clips from YouTube
+            for clip_id in clip_ids:
+                threading.Thread(target=download_clip, args=(clip_id, url), daemon=True).start()
 
-        return jsonify({"session_id": session_id, "clip_count": len(parsed), "mode": "direct"})
+        mode = "local" if local_file else "direct"
+        return jsonify({"session_id": session_id, "clip_count": len(parsed), "mode": mode})
 
     # No timestamps — do Phase A scan
     conn = get_db()
