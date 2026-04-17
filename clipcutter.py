@@ -177,6 +177,10 @@ def init_db():
     conn.commit()
 
     # Schema migrations — idempotent, commit once after all statements
+    # Migrations — each wrapped so re-running on an existing DB is a no-op.
+    # Columns from deleted features (edl_path, markers_path, refined_*, mode,
+    # resolve_status) are intentionally NOT dropped: SQLite can't drop columns
+    # cleanly, and leaving them harmless avoids a destructive migration.
     for migration in [
         "ALTER TABLE clips ADD COLUMN generated_title TEXT DEFAULT ''",
         "ALTER TABLE clips ADD COLUMN generated_description TEXT DEFAULT ''",
@@ -184,14 +188,8 @@ def init_db():
         "ALTER TABLE clips ADD COLUMN trimmed_transcript TEXT DEFAULT ''",
         "ALTER TABLE sessions ADD COLUMN gather_phase TEXT DEFAULT ''",
         "ALTER TABLE sessions ADD COLUMN stream_captions TEXT DEFAULT ''",
-        "ALTER TABLE snipcut_jobs ADD COLUMN edl_path TEXT DEFAULT ''",
-        "ALTER TABLE snipcut_jobs ADD COLUMN resolve_status TEXT DEFAULT ''",
         "ALTER TABLE snipcut_jobs ADD COLUMN transcript_path TEXT DEFAULT ''",
         "ALTER TABLE snipcut_jobs ADD COLUMN output_fps INTEGER DEFAULT 30",
-        "ALTER TABLE snipcut_jobs ADD COLUMN markers_path TEXT DEFAULT ''",
-        "ALTER TABLE snipcut_jobs ADD COLUMN mode TEXT DEFAULT 'full'",
-        "ALTER TABLE snipcut_jobs ADD COLUMN refined_edl_path TEXT DEFAULT ''",
-        "ALTER TABLE snipcut_jobs ADD COLUMN refined_markers_path TEXT DEFAULT ''",
         "ALTER TABLE snipcut_jobs ADD COLUMN metadata_json TEXT DEFAULT ''",
         "ALTER TABLE snipcut_jobs ADD COLUMN srt_path TEXT DEFAULT ''",
         "ALTER TABLE snipcut_jobs ADD COLUMN resolve_script TEXT DEFAULT ''",
@@ -224,20 +222,6 @@ def init_db():
             analysis_reasoning TEXT DEFAULT '',
             created_at TEXT DEFAULT CURRENT_TIMESTAMP
         );
-
-        CREATE TABLE IF NOT EXISTS snipcut_markers (
-            id TEXT PRIMARY KEY,
-            job_id TEXT NOT NULL,
-            sort_order INTEGER NOT NULL,
-            start_seconds REAL NOT NULL,
-            end_seconds REAL NOT NULL,
-            reason TEXT NOT NULL,
-            content TEXT DEFAULT '',
-            decision TEXT DEFAULT 'pending',
-            FOREIGN KEY (job_id) REFERENCES snipcut_jobs(id) ON DELETE CASCADE
-        );
-        CREATE INDEX IF NOT EXISTS idx_snipcut_markers_job
-            ON snipcut_markers(job_id, sort_order);
     """)
     conn.commit()
 
@@ -1485,48 +1469,6 @@ def snipcut_detect_silence(words: list, threshold: float = 2.5) -> list:
     return gaps
 
 
-def snipcut_detect_silence_ffmpeg(audio_path: str, threshold_db: int = -35,
-                                   min_duration: float = 2.5) -> list:
-    """Run ffmpeg's silencedetect filter and return gaps as [{start, end, duration}].
-
-    Used by silence-only mode to skip Whisper transcription entirely —
-    much faster for 'just kill dead air' workflows.
-    """
-    cmd = [
-        "ffmpeg", "-i", audio_path,
-        "-af", f"silencedetect=n={threshold_db}dB:d={min_duration}",
-        "-f", "null", "-",
-    ]
-    result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
-    # silencedetect writes to stderr
-    stderr = result.stderr
-
-    gaps = []
-    current_start = None
-    for line in stderr.splitlines():
-        line = line.strip()
-        if "silence_start:" in line:
-            try:
-                current_start = float(line.split("silence_start:")[1].strip().split()[0])
-            except (ValueError, IndexError):
-                current_start = None
-        elif "silence_end:" in line and current_start is not None:
-            try:
-                end_part = line.split("silence_end:")[1].strip().split("|")[0].strip()
-                end = float(end_part.split()[0])
-                duration = end - current_start
-                if duration >= min_duration:
-                    gaps.append({
-                        "start": round(current_start, 2),
-                        "end": round(end, 2),
-                        "duration": round(duration, 2),
-                    })
-            except (ValueError, IndexError):
-                pass
-            current_start = None
-    return gaps
-
-
 def _snipcut_analyze_chunk(words_chunk: list, api_key: str) -> list:
     """Analyze one chunk of words (~10 min) with Claude. Returns list of cuts."""
     def fmt(w):
@@ -1672,18 +1614,6 @@ Respond with a JSON object ONLY — no markdown, no explanation:
     return {}
 
 
-def snipcut_seconds_to_tc(seconds: float, fps: int = 30) -> str:
-    """Convert seconds to HH:MM:SS:FF timecode for EDL."""
-    total_frames = round(seconds * fps)
-    ff = total_frames % fps
-    total_seconds = total_frames // fps
-    ss = total_seconds % 60
-    total_minutes = total_seconds // 60
-    mm = total_minutes % 60
-    hh = total_minutes // 60
-    return f"{hh:02d}:{mm:02d}:{ss:02d}:{ff:02d}"
-
-
 def snipcut_snap_cuts_to_words(cuts: list, words: list, buffer_seconds: float = 0.05) -> list:
     """Snap each cut's start/end to actual Whisper word boundaries.
 
@@ -1792,20 +1722,6 @@ def snipcut_merge_cuts(ai_cuts: list, silence_gaps: list, min_merge_gap: float =
     return merged
 
 
-def snipcut_compute_keeps(cuts: list, total_duration: float) -> list:
-    """Given sorted merged cuts, return the inverse 'keep' segments."""
-    keeps = []
-    cursor = 0.0
-    for c in cuts:
-        if c["start"] > cursor:
-            keeps.append({"start": cursor, "end": c["start"]})
-        cursor = max(cursor, c["end"])
-    if cursor < total_duration:
-        keeps.append({"start": cursor, "end": total_duration})
-    # Filter out tiny segments (< 0.1s)
-    return [k for k in keeps if (k["end"] - k["start"]) > 0.1]
-
-
 def snipcut_generate_clean_transcript(words: list, cuts: list, output_path: str):
     """Reconstruct transcript text with cut words removed.
     A word is removed if its midpoint falls inside any cut range."""
@@ -1842,203 +1758,6 @@ def snipcut_generate_clean_transcript(words: list, cuts: list, output_path: str)
         lines.append(" ".join(current))
 
     Path(output_path).write_text("\n".join(lines) + "\n")
-
-
-SNIPCUT_MODES = ("full", "silence_only")
-SNIPCUT_DECISIONS = ("pending", "keep", "cut")
-
-SNIPCUT_REASON_EMOJI = {
-    "silence": "🔵",
-    "filler": "🟡",
-    "repeated_take": "🔴",
-    "merged": "🟣",
-    "cut": "⚪",
-}
-
-SNIPCUT_REASON_COLOR = {
-    "silence": "#3b82f6",
-    "filler": "#eab308",
-    "repeated_take": "#ef4444",
-    "merged": "#a855f7",
-    "cut": "#7a7a88",
-}
-
-
-def snipcut_reason_emoji(reason: str) -> str:
-    return SNIPCUT_REASON_EMOJI.get(reason or "cut", "⚪")
-
-
-def snipcut_generate_markers_txt(merged_cuts: list, output_path: str, title: str,
-                                  duration: float, fps: int = 30):
-    """Human-readable marker list — timecodes + reasons + content snippets.
-    Non-destructive alternative to the cuts EDL: the user imports the CFR video
-    manually, opens this file alongside, and jumps to each timecode to review."""
-    def fmt_mm_ss(seconds: float) -> str:
-        m = int(seconds // 60)
-        s = int(seconds % 60)
-        return f"{m}:{s:02d}"
-
-    total_flagged = sum(max(0, c["end"] - c["start"]) for c in merged_cuts)
-    lines = [
-        f"SnipCut Markers — {title}",
-        f"Video: {fmt_mm_ss(duration)} @ {fps}fps · {len(merged_cuts)} markers · {fmt_mm_ss(total_flagged)} flagged",
-        "",
-        "Legend:  🔵 Silence   🟡 Filler   🔴 Repeated take   🟣 Merged",
-        "",
-        "Review each marker in DaVinci Resolve — jump to the timecode and cut manually if needed.",
-        "",
-    ]
-    for c in merged_cuts:
-        tc = snipcut_seconds_to_tc(c["start"], fps)
-        reason_raw = (c.get("reason") or "cut")
-        emoji = snipcut_reason_emoji(reason_raw)
-        if reason_raw == "silence":
-            gap = c["end"] - c["start"]
-            reason = f"SILENCE {gap:.1f}s"
-            content = "(gap)"
-        else:
-            reason = reason_raw.upper().replace("_", " ")
-            content_raw = (c.get("content") or "").strip()
-            content = f'"{content_raw[:100]}"' if content_raw else ""
-        lines.append(f" {emoji} {tc}  {reason:<16} {content}")
-    Path(output_path).write_text("\n".join(lines) + "\n")
-
-
-def snipcut_generate_edl(keeps: list, edl_path: str, title: str, source_name: str = "AX", fps: int = 30):
-    """Write a CMX 3600 EDL file.
-    Each 'keep' segment becomes an event; record timecodes are sequential."""
-    lines = [f"TITLE: {title}", "FCM: NON-DROP FRAME", ""]
-    record_cursor = 0.0
-    for i, keep in enumerate(keeps, start=1):
-        src_in = snipcut_seconds_to_tc(keep["start"], fps)
-        src_out = snipcut_seconds_to_tc(keep["end"], fps)
-        rec_in = snipcut_seconds_to_tc(record_cursor, fps)
-        duration = keep["end"] - keep["start"]
-        record_cursor += duration
-        rec_out = snipcut_seconds_to_tc(record_cursor, fps)
-        # Event format: EDIT# REEL CHANNELS TRANSITION SRC_IN SRC_OUT REC_IN REC_OUT
-        lines.append(f"{i:03d}  {source_name:<8} AA/V  C        {src_in} {src_out} {rec_in} {rec_out}")
-    lines.append("")
-    Path(edl_path).write_text("\n".join(lines))
-
-
-def _get_resolve_script_module():
-    """Load DaVinciResolveScript. Returns module or None if unavailable."""
-    script_api = "/Library/Application Support/Blackmagic Design/DaVinci Resolve/Developer/Scripting"
-    script_lib = "/Applications/DaVinci Resolve/DaVinci Resolve.app/Contents/Libraries/Fusion/fusionscript.so"
-    if not os.path.exists(script_api):
-        return None
-    os.environ.setdefault("RESOLVE_SCRIPT_API", script_api)
-    os.environ.setdefault("RESOLVE_SCRIPT_LIB", script_lib)
-    modules_dir = os.path.join(script_api, "Modules")
-    if modules_dir not in sys.path:
-        sys.path.insert(0, modules_dir)
-    try:
-        import DaVinciResolveScript as dvr  # type: ignore
-        return dvr
-    except ImportError:
-        return None
-
-
-def snipcut_open_in_resolve(cfr_path: str, edl_path: str, project_name: str) -> dict:
-    """Launch/connect to DaVinci Resolve and import the clip + EDL.
-    Returns {ok, message} or {error, message}."""
-    if not os.path.exists(cfr_path):
-        return {"error": "CFR file not found"}
-    if not os.path.exists(edl_path):
-        return {"error": "EDL file not found"}
-
-    dvr = _get_resolve_script_module()
-    if dvr is None:
-        return {"error": "DaVinci Resolve scripting module not found. Is Resolve installed?"}
-
-    # Connect, or launch if not running
-    resolve = dvr.scriptapp("Resolve")
-    if resolve is None:
-        # Try launching Resolve
-        subprocess.Popen(["open", "-a", "DaVinci Resolve"])
-        # Wait up to 45s for API to respond
-        import time
-        for _ in range(45):
-            time.sleep(1)
-            resolve = dvr.scriptapp("Resolve")
-            if resolve is not None:
-                break
-        if resolve is None:
-            return {"error": "DaVinci Resolve didn't respond. Is External Scripting enabled in Preferences → System?"}
-
-    try:
-        pm = resolve.GetProjectManager()
-        if pm is None:
-            return {"error": "Could not get ProjectManager"}
-
-        # Create project with unique name if needed
-        final_name = project_name
-        project = pm.CreateProject(final_name)
-        if project is None:
-            # Name already taken — try appending a number
-            for n in range(2, 20):
-                candidate = f"{project_name} ({n})"
-                project = pm.CreateProject(candidate)
-                if project is not None:
-                    final_name = candidate
-                    break
-            if project is None:
-                # Try loading the existing project
-                if pm.LoadProject(project_name):
-                    project = pm.GetCurrentProject()
-                    final_name = project_name
-
-        if project is None:
-            return {"error": f"Could not create or open project '{project_name}'"}
-
-        mp = project.GetMediaPool()
-        if mp is None:
-            return {"error": "Could not get MediaPool"}
-
-        # Import the CFR video
-        media = mp.ImportMedia([cfr_path])
-        if not media:
-            return {"error": "Failed to import CFR file into media pool"}
-
-        # Import EDL as a timeline
-        timeline = mp.ImportTimelineFromFile(edl_path)
-        if timeline is None:
-            return {"error": "Project created + media imported, but EDL import failed. Import manually from File → Import Timeline → Pre-Conformed EDL."}
-
-        return {"ok": True, "project": final_name, "message": f"Opened in DaVinci Resolve as project '{final_name}'"}
-    except Exception as e:
-        return {"error": f"Resolve API error: {str(e)[:200]}"}
-
-
-def snipcut_populate_markers_table(job_id: str, merged_cuts: list):
-    """Insert one row into snipcut_markers per merged cut, all with decision='pending'.
-    Clears any existing rows for this job first so retries produce a clean set."""
-    rows = []
-    for i, c in enumerate(merged_cuts):
-        try:
-            start = float(c.get("start", 0))
-            end = float(c.get("end", 0))
-        except (TypeError, ValueError):
-            continue
-        if end <= start:
-            continue
-        reason = (c.get("reason") or "cut").strip() or "cut"
-        content = (c.get("content") or "").strip()[:500]
-        rows.append((uuid.uuid4().hex[:12], job_id, i,
-                     round(start, 3), round(end, 3), reason, content))
-
-    conn = get_db()
-    try:
-        conn.execute("DELETE FROM snipcut_markers WHERE job_id = ?", (job_id,))
-        conn.executemany(
-            "INSERT INTO snipcut_markers (id, job_id, sort_order, start_seconds, end_seconds, "
-            "reason, content, decision) VALUES (?, ?, ?, ?, ?, ?, 'pending')",
-            rows
-        )
-        conn.commit()
-    finally:
-        conn.close()
 
 
 def snipcut_generate_srt(merged_cuts: list, output_path: str):
@@ -2157,10 +1876,9 @@ def snipcut_generate_resolve_script(merged_cuts: list, output_fps: int,
 
 def snipcut_finalize_outputs(job_id: str, input_path: str, cfr_output: str,
                               ai_cuts: list, silence_gaps: list, words: list,
-                              duration: float, output_fps: int,
-                              write_transcript: bool = True) -> dict:
-    """Generate EDL + markers.txt + optional clean transcript for a processed job.
-    Re-probes CFR file for its real fps as a final safety check. Returns paths dict."""
+                              duration: float, output_fps: int) -> dict:
+    """Generate SRT markers, Resolve Lua setup script, and clean transcript.
+    Re-probes CFR file for real fps as a safety check. Returns paths dict."""
     try:
         cfr_info = snipcut_probe(cfr_output)
         actual_fps = round(cfr_info["fps"]) or output_fps
@@ -2172,17 +1890,10 @@ def snipcut_finalize_outputs(job_id: str, input_path: str, cfr_output: str,
         print(f"  SnipCut: couldn't re-probe CFR ({e}), using {output_fps}fps")
 
     merged_cuts = snipcut_merge_cuts(ai_cuts, silence_gaps)
-    keeps = snipcut_compute_keeps(merged_cuts, duration)
     title = Path(input_path).stem
 
-    edl_path = str(Path(cfr_output).with_suffix(".edl"))
-    snipcut_generate_edl(keeps, edl_path, title, fps=output_fps)
-
-    markers_path = str(Path(input_path).with_name(f"{title}_markers.txt"))
-    snipcut_generate_markers_txt(merged_cuts, markers_path, title, duration, fps=output_fps)
-
     transcript_path = ""
-    if write_transcript and words:
+    if words:
         transcript_path = str(Path(input_path).with_name(f"{title}_transcript.txt"))
         snipcut_generate_clean_transcript(words, merged_cuts, transcript_path)
 
@@ -2195,10 +1906,7 @@ def snipcut_finalize_outputs(job_id: str, input_path: str, cfr_output: str,
         project_name=title,
     )
 
-    snipcut_populate_markers_table(job_id, merged_cuts)
-
-    return {"edl_path": edl_path, "markers_path": markers_path,
-            "transcript_path": transcript_path, "srt_path": srt_path,
+    return {"transcript_path": transcript_path, "srt_path": srt_path,
             "resolve_script": resolve_script}
 
 
@@ -2222,7 +1930,6 @@ def snipcut_process(job_id: str):
     input_path = job["input_path"]
     cfr_output = str(Path(input_path).with_name(f"{Path(input_path).stem}_cfr{Path(input_path).suffix}"))
     audio_path = str(APP_DIR / f"snipcut_audio_{job_id}.wav")
-    mode = (job.get("mode") or "full").strip() or "full"
 
     try:
         # ── Checkpoint: probe ──
@@ -2237,53 +1944,6 @@ def snipcut_process(job_id: str):
             _snipcut_update(job_id, duration_seconds=info["duration"],
                             is_vfr=1 if info["is_vfr"] else 0,
                             width=info["width"], height=info["height"])
-
-        # ── Silence-only fast mode: skip Whisper + Claude entirely ──
-        if mode == "silence_only":
-            has_cfr = job["cfr_output_path"] and os.path.exists(job["cfr_output_path"])
-            output_fps = job.get("output_fps") or 30
-
-            if not has_cfr:
-                _snipcut_update(job_id, status="processing")
-                cfr_output, output_fps = snipcut_convert_cfr(input_path, cfr_output, job_id)
-                _snipcut_update(job_id, output_fps=output_fps)
-            else:
-                cfr_output = job["cfr_output_path"]
-                if not job.get("output_fps"):
-                    try:
-                        cfr_info = snipcut_probe(cfr_output)
-                        output_fps = round(cfr_info["fps"]) or 30
-                        _snipcut_update(job_id, output_fps=output_fps)
-                    except Exception:
-                        pass
-
-            has_silence = job["silence_gaps_json"] and len(job["silence_gaps_json"]) > 2
-            if has_silence:
-                silence_gaps = json.loads(job["silence_gaps_json"])
-                print(f"  SnipCut (silence-only): resuming — {len(silence_gaps)} gaps exist")
-            else:
-                _snipcut_update(job_id, status="detecting_silence", transcribe_progress=50.0)
-                snipcut_extract_audio(input_path, audio_path)
-                silence_gaps = snipcut_detect_silence_ffmpeg(audio_path, threshold_db=-35, min_duration=2.5)
-                _snipcut_update(job_id, silence_gaps_json=json.dumps(silence_gaps),
-                                transcribe_progress=100.0)
-                if os.path.exists(audio_path):
-                    try: os.remove(audio_path)
-                    except OSError: pass
-
-            _snipcut_update(job_id, cuts_json="[]", status="generating_edl")
-            paths = snipcut_finalize_outputs(
-                job_id, input_path, cfr_output,
-                ai_cuts=[], silence_gaps=silence_gaps, words=[],
-                duration=info["duration"], output_fps=output_fps,
-                write_transcript=False,
-            )
-            _snipcut_update(job_id, edl_path=paths["edl_path"],
-                            markers_path=paths["markers_path"],
-                            srt_path=paths["srt_path"],
-                            resolve_script=paths["resolve_script"],
-                            status="done")
-            return
 
         # ── Checkpoint: CFR + transcript ──
         has_cfr = job["cfr_output_path"] and os.path.exists(job["cfr_output_path"])
@@ -2387,16 +2047,13 @@ def snipcut_process(job_id: str):
                 _snipcut_update(job_id, metadata_json=json.dumps(metadata))
                 print(f"  SnipCut: generated metadata — {metadata.get('title', '')[:60]}")
 
-        _snipcut_update(job_id, status="generating_edl")
+        _snipcut_update(job_id, status="generating_outputs")
         paths = snipcut_finalize_outputs(
             job_id, input_path, cfr_output,
             ai_cuts=ai_cuts, silence_gaps=silence_gaps, words=words,
             duration=info["duration"], output_fps=output_fps,
-            write_transcript=True,
         )
-        _snipcut_update(job_id, edl_path=paths["edl_path"],
-                        transcript_path=paths["transcript_path"],
-                        markers_path=paths["markers_path"],
+        _snipcut_update(job_id, transcript_path=paths["transcript_path"],
                         srt_path=paths["srt_path"],
                         resolve_script=paths["resolve_script"],
                         status="done")
@@ -3023,10 +2680,6 @@ def api_snipcut_create():
     if not input_path.lower().endswith(SUPPORTED_VIDEO_EXTS):
         return jsonify({"error": f"Unsupported format. Accepted: {', '.join(SUPPORTED_VIDEO_EXTS)}"}), 400
 
-    mode = (data.get("mode") or "full").strip()
-    if mode not in SNIPCUT_MODES:
-        mode = "full"
-
     # Check if already processed
     cfr_output = str(Path(input_path).with_name(f"{Path(input_path).stem}_cfr{Path(input_path).suffix}"))
     if os.path.exists(cfr_output):
@@ -3038,8 +2691,8 @@ def api_snipcut_create():
     conn = get_db()
     try:
         conn.execute(
-            "INSERT INTO snipcut_jobs (id, input_path, input_filename, status, mode) VALUES (?, ?, ?, 'queued', ?)",
-            (job_id, input_path, filename, mode)
+            "INSERT INTO snipcut_jobs (id, input_path, input_filename, status) VALUES (?, ?, ?, 'queued')",
+            (job_id, input_path, filename)
         )
         conn.commit()
     finally:
@@ -3073,8 +2726,7 @@ def api_snipcut_list():
         rows = rows_to_list(conn.execute(
             "SELECT id, input_filename, status, error_text, duration_seconds, is_vfr, "
             "cfr_output_path, cfr_progress, transcribe_progress, cuts_json, "
-            "analysis_reasoning, edl_path, resolve_status, transcript_path, output_fps, markers_path, "
-            "mode, refined_edl_path, refined_markers_path, metadata_json, "
+            "analysis_reasoning, transcript_path, output_fps, metadata_json, "
             "srt_path, resolve_script, created_at "
             "FROM snipcut_jobs ORDER BY created_at DESC LIMIT 20"
         ).fetchall())
@@ -3229,145 +2881,6 @@ def api_snipcut_open_resolve(job_id):
         pass  # Not fatal — user can open Resolve manually
 
     return jsonify({"ok": True})
-
-
-# ---------- SnipCut Interactive Review Routes ----------
-
-@app.route("/api/snipcut/jobs/<job_id>/markers")
-def api_snipcut_markers_list(job_id):
-    """Return all markers for a job, ordered by sort_order."""
-    conn = get_db()
-    try:
-        # Ensure job exists
-        job = conn.execute("SELECT id FROM snipcut_jobs WHERE id = ?", (job_id,)).fetchone()
-        if not job:
-            return jsonify({"error": "Job not found"}), 404
-        rows = rows_to_list(conn.execute(
-            "SELECT id, sort_order, start_seconds, end_seconds, reason, content, decision "
-            "FROM snipcut_markers WHERE job_id = ? ORDER BY sort_order ASC",
-            (job_id,)
-        ).fetchall())
-    finally:
-        conn.close()
-    return jsonify({"markers": rows})
-
-
-@app.route("/api/snipcut/markers/<marker_id>", methods=["PUT"])
-def api_snipcut_marker_update(marker_id):
-    """Update a single marker's decision."""
-    data = request.json or {}
-    decision = (data.get("decision") or "").strip()
-    if decision not in SNIPCUT_DECISIONS:
-        return jsonify({"error": f"decision must be one of {'|'.join(SNIPCUT_DECISIONS)}"}), 400
-    conn = get_db()
-    try:
-        cur = conn.execute(
-            "UPDATE snipcut_markers SET decision = ? WHERE id = ?",
-            (decision, marker_id)
-        )
-        conn.commit()
-        if cur.rowcount == 0:
-            return jsonify({"error": "Marker not found"}), 404
-    finally:
-        conn.close()
-    return jsonify({"ok": True})
-
-
-@app.route("/api/snipcut/jobs/<job_id>/markers/bulk", methods=["PUT"])
-def api_snipcut_markers_bulk(job_id):
-    """Apply a list of decision updates in one request."""
-    data = request.json or {}
-    updates = data.get("updates") or []
-    if not isinstance(updates, list):
-        return jsonify({"error": "updates must be a list"}), 400
-    conn = get_db()
-    try:
-        applied = 0
-        for u in updates:
-            mid = u.get("id")
-            decision = u.get("decision")
-            if not mid or decision not in SNIPCUT_DECISIONS:
-                continue
-            cur = conn.execute(
-                "UPDATE snipcut_markers SET decision = ? WHERE id = ? AND job_id = ?",
-                (decision, mid, job_id)
-            )
-            applied += cur.rowcount
-        conn.commit()
-    finally:
-        conn.close()
-    return jsonify({"ok": True, "applied": applied})
-
-
-@app.route("/api/snipcut/jobs/<job_id>/export-refined", methods=["POST"])
-def api_snipcut_export_refined(job_id):
-    """Regenerate EDL + markers.txt using only markers where decision='cut'."""
-    conn = get_db()
-    try:
-        job = row_to_dict(conn.execute(
-            "SELECT * FROM snipcut_jobs WHERE id = ?", (job_id,)
-        ).fetchone())
-        if not job:
-            return jsonify({"error": "Job not found"}), 404
-        rows = rows_to_list(conn.execute(
-            "SELECT start_seconds, end_seconds, reason, content "
-            "FROM snipcut_markers WHERE job_id = ? AND decision = 'cut' ORDER BY sort_order ASC",
-            (job_id,)
-        ).fetchall())
-    finally:
-        conn.close()
-
-    if not job.get("cfr_output_path") or not os.path.exists(job["cfr_output_path"]):
-        return jsonify({"error": "CFR output not found"}), 400
-
-    approved_cuts = [
-        {"start": r["start_seconds"], "end": r["end_seconds"],
-         "reason": r["reason"], "content": r["content"] or ""}
-        for r in rows
-    ]
-
-    cfr_output = job["cfr_output_path"]
-    input_path = job["input_path"]
-    title = Path(input_path).stem
-    duration = job.get("duration_seconds") or 0
-    output_fps = job.get("output_fps") or 30
-
-    keeps = snipcut_compute_keeps(approved_cuts, duration)
-    refined_edl_path = str(Path(cfr_output).with_name(f"{title}_refined.edl"))
-    snipcut_generate_edl(keeps, refined_edl_path, f"{title}_refined", fps=output_fps)
-
-    refined_markers_path = str(Path(input_path).with_name(f"{title}_refined_markers.txt"))
-    snipcut_generate_markers_txt(approved_cuts, refined_markers_path, f"{title} (refined)",
-                                  duration, fps=output_fps)
-
-    _snipcut_update(job_id, refined_edl_path=refined_edl_path,
-                    refined_markers_path=refined_markers_path)
-
-    return jsonify({
-        "ok": True,
-        "refined_edl_path": refined_edl_path,
-        "refined_markers_path": refined_markers_path,
-        "approved_count": len(approved_cuts),
-        "kept_segments": len(keeps),
-    })
-
-
-@app.route("/api/snipcut/jobs/<job_id>/video")
-def api_snipcut_video(job_id):
-    """Stream the CFR video file for inline preview (supports byte-range)."""
-    conn = get_db()
-    try:
-        job = row_to_dict(conn.execute(
-            "SELECT cfr_output_path FROM snipcut_jobs WHERE id = ?", (job_id,)
-        ).fetchone())
-    finally:
-        conn.close()
-    if not job or not job.get("cfr_output_path"):
-        return jsonify({"error": "Job not found"}), 404
-    video_path = job["cfr_output_path"]
-    if not os.path.exists(video_path):
-        return jsonify({"error": "Video file missing"}), 404
-    return send_file(video_path, mimetype="video/mp4", conditional=True)
 
 
 # ---------- Entry Point ----------
