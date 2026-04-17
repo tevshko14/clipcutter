@@ -83,6 +83,29 @@ SESSIONS_DIR.mkdir(exist_ok=True)
 OUTPUT_DIR = Path.home() / "ClipCutter_Clips"
 OUTPUT_DIR.mkdir(exist_ok=True)
 
+# Video file extensions accepted by SnipCut (input) and right-click "Open With".
+# The output is always CFR MP4 regardless of input codec.
+SUPPORTED_VIDEO_EXTS = (".mp4", ".mkv", ".mov", ".webm", ".avi",
+                        ".ts", ".mts", ".flv", ".m4v", ".wmv")
+
+
+def _resolve_user_path(raw: str) -> Path:
+    """Resolve a user-supplied path (strips wrapping quotes, expands ~, follows
+    symlinks) and confirm it points to an existing file.
+    Raises FileNotFoundError if the path doesn't resolve or isn't a regular file.
+    Used to harden subprocess/ffmpeg args against traversal attempts even though
+    we invoke with shell=False."""
+    cleaned = (raw or "").strip().strip("'\"")
+    if not cleaned:
+        raise FileNotFoundError("empty path")
+    try:
+        resolved = Path(cleaned).expanduser().resolve(strict=True)
+    except (OSError, RuntimeError, ValueError) as e:
+        raise FileNotFoundError(str(e))
+    if not resolved.is_file():
+        raise FileNotFoundError(f"not a file: {cleaned}")
+    return resolved
+
 # ---------- Config ----------
 
 DEFAULT_CONFIG = {
@@ -2112,13 +2135,17 @@ def api_create_session():
     data = request.json
     url = data.get("url", "").strip()
     text = data.get("text", "").strip()
-    local_file = data.get("local_file", "").strip().strip("'\"")
+    raw_local = data.get("local_file", "")
 
-    # Need either a URL or a local file (local file mode skips yt-dlp entirely)
-    if not url and not local_file:
+    if not url and not raw_local:
         return jsonify({"error": "YouTube URL or local file required"}), 400
-    if local_file and not os.path.exists(local_file):
-        return jsonify({"error": f"File not found: {local_file}"}), 400
+
+    local_file = ""
+    if raw_local:
+        try:
+            local_file = str(_resolve_user_path(raw_local))
+        except FileNotFoundError as e:
+            return jsonify({"error": f"File not found: {e}"}), 400
 
     session_id = uuid.uuid4().hex[:12]
     config = load_config()
@@ -2671,22 +2698,25 @@ def api_open_folder():
 @app.route("/api/snipcut/jobs", methods=["POST"])
 def api_snipcut_create():
     data = request.json or {}
-    input_path = (data.get("input_path") or "").strip().strip("'\"")
-    if not input_path:
+    raw_input = data.get("input_path") or ""
+    if not raw_input.strip():
         return jsonify({"error": "input_path required"}), 400
-    if not os.path.exists(input_path):
-        return jsonify({"error": f"File not found: {input_path}"}), 400
-    SUPPORTED_VIDEO_EXTS = (".mp4", ".mkv", ".mov", ".webm", ".avi", ".ts", ".mts", ".flv", ".m4v", ".wmv")
+
+    try:
+        resolved = _resolve_user_path(raw_input)
+    except FileNotFoundError as e:
+        return jsonify({"error": f"File not found: {e}"}), 400
+
+    input_path = str(resolved)
     if not input_path.lower().endswith(SUPPORTED_VIDEO_EXTS):
         return jsonify({"error": f"Unsupported format. Accepted: {', '.join(SUPPORTED_VIDEO_EXTS)}"}), 400
 
-    # Check if already processed
-    cfr_output = str(Path(input_path).with_name(f"{Path(input_path).stem}_cfr{Path(input_path).suffix}"))
+    cfr_output = str(resolved.with_name(f"{resolved.stem}_cfr{resolved.suffix}"))
     if os.path.exists(cfr_output):
         return jsonify({"error": f"Output already exists: {Path(cfr_output).name}. Delete it first."}), 400
 
     job_id = uuid.uuid4().hex[:12]
-    filename = Path(input_path).name
+    filename = resolved.name
 
     conn = get_db()
     try:
@@ -2788,7 +2818,7 @@ def api_snipcut_pick_file():
         if windows:
             result = windows[0].create_file_dialog(
                 webview.OPEN_DIALOG,
-                file_types=("Video Files (*.mp4;*.mkv;*.mov;*.webm;*.avi;*.ts;*.mts;*.flv;*.m4v;*.wmv)",),
+                file_types=(f"Video Files ({';'.join(f'*{ext}' for ext in SUPPORTED_VIDEO_EXTS)})",),
             )
             if result and len(result) > 0:
                 return jsonify({"path": result[0]})
@@ -2893,6 +2923,15 @@ _pending_file = {"path": None, "consumed": False}
 _pending_session = {"youtube_url": None, "timestamps": None, "title": None, "consumed": False}
 
 
+# Realistic clipcutter:// URLs (url + base64-encoded timestamps + title)
+# run ~2-5KB for dozens of shorts. 32KB leaves comfortable headroom while
+# still cutting off garbage/hostile payloads before we decode them.
+_CLIPCUTTER_URL_MAX_LEN = 32 * 1024
+_CLIPCUTTER_TS_MAX_LEN = 24 * 1024
+_CLIPCUTTER_TITLE_MAX_LEN = 500
+_CLIPCUTTER_YT_MAX_LEN = 2048
+
+
 def _parse_clipcutter_url(url: str) -> dict:
     """Parse a clipcutter:// URL into a session payload.
     Expected formats:
@@ -2902,14 +2941,20 @@ def _parse_clipcutter_url(url: str) -> dict:
     from urllib.parse import urlparse, parse_qs, unquote
     import base64
 
+    # Size cap guards against accidental or hostile giant payloads that
+    # would hang base64 decoding or json parsing before validation.
+    if len(url) > _CLIPCUTTER_URL_MAX_LEN:
+        print(f"  clipcutter:// URL exceeds {_CLIPCUTTER_URL_MAX_LEN} bytes, ignoring")
+        return {}
+
     try:
         parsed = urlparse(url)
         if parsed.scheme != "clipcutter":
             return {}
         qs = parse_qs(parsed.query)
-        yt = (qs.get("url") or [""])[0]
-        title = (qs.get("title") or [""])[0]
-        ts_raw = (qs.get("timestamps") or [""])[0]
+        yt = (qs.get("url") or [""])[0][:_CLIPCUTTER_YT_MAX_LEN]
+        title = (qs.get("title") or [""])[0][:_CLIPCUTTER_TITLE_MAX_LEN]
+        ts_raw = (qs.get("timestamps") or [""])[0][:_CLIPCUTTER_TS_MAX_LEN]
         timestamps = ""
         if ts_raw:
             # Try base64 JSON first, fall back to plain text
@@ -2963,7 +3008,7 @@ def main():
                 _pending_session.update(session)
                 _pending_session["consumed"] = False
                 print(f"  Queued StreamBuddy session: {session.get('title') or session['youtube_url']}")
-        elif os.path.isfile(candidate) and any(candidate.lower().endswith(ext) for ext in (".mp4", ".mkv", ".mov", ".webm", ".avi", ".ts", ".mts", ".flv", ".m4v", ".wmv")):
+        elif os.path.isfile(candidate) and candidate.lower().endswith(SUPPORTED_VIDEO_EXTS):
             _pending_file["path"] = os.path.abspath(candidate)
             print(f"  Queued for SnipCut: {Path(candidate).name}")
 
