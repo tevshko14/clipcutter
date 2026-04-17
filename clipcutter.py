@@ -9,7 +9,6 @@ import re
 import sys
 import json
 import shutil
-import sqlite3
 import subprocess
 import threading
 import uuid
@@ -70,224 +69,22 @@ from flask import Flask, Response, render_template_string, request, jsonify, sen
 import struct
 import webview
 
+# ClipCutter modules (split out to keep this file navigable)
+from cc_config import (
+    APP_DIR, DB_PATH, CONFIG_PATH, SESSIONS_DIR, OUTPUT_DIR,
+    SUPPORTED_VIDEO_EXTS, DEFAULT_CONFIG,
+    load_config, save_config,
+)
+from cc_db import (
+    get_db, init_db, row_to_dict, rows_to_list,
+    get_session_output_dir, snipcut_update as _snipcut_update,
+)
+from cc_helpers import (
+    sanitize_note, resolve_user_path,
+    parse_timestamp, seconds_to_hms, parse_clip_entries,
+)
+
 app = Flask(__name__)
-
-# ---------- Paths ----------
-
-APP_DIR = Path.home() / ".clipcutter"
-APP_DIR.mkdir(exist_ok=True)
-DB_PATH = APP_DIR / "clipcutter.db"
-CONFIG_PATH = APP_DIR / "config.json"
-SESSIONS_DIR = APP_DIR / "sessions"
-SESSIONS_DIR.mkdir(exist_ok=True)
-OUTPUT_DIR = Path.home() / "ClipCutter_Clips"
-OUTPUT_DIR.mkdir(exist_ok=True)
-
-# Video file extensions accepted by SnipCut (input) and right-click "Open With".
-# The output is always CFR MP4 regardless of input codec.
-SUPPORTED_VIDEO_EXTS = (".mp4", ".mkv", ".mov", ".webm", ".avi",
-                        ".ts", ".mts", ".flv", ".m4v", ".wmv")
-
-
-def _resolve_user_path(raw: str) -> Path:
-    """Resolve a user-supplied path (strips wrapping quotes, expands ~, follows
-    symlinks) and confirm it points to an existing file.
-    Raises FileNotFoundError if the path doesn't resolve or isn't a regular file.
-    Used to harden subprocess/ffmpeg args against traversal attempts even though
-    we invoke with shell=False."""
-    cleaned = (raw or "").strip().strip("'\"")
-    if not cleaned:
-        raise FileNotFoundError("empty path")
-    try:
-        resolved = Path(cleaned).expanduser().resolve(strict=True)
-    except (OSError, RuntimeError, ValueError) as e:
-        raise FileNotFoundError(str(e))
-    if not resolved.is_file():
-        raise FileNotFoundError(f"not a file: {cleaned}")
-    return resolved
-
-# ---------- Config ----------
-
-DEFAULT_CONFIG = {
-    "api_key": "",
-    "default_clip_window": 5,
-    "target_duration": 60,
-    "whisper_model": "base",
-    "output_dir": str(OUTPUT_DIR),
-    "channel_profile": "",
-    "streambuddy_url": "",
-    "streambuddy_token": "",
-}
-
-def load_config():
-    if CONFIG_PATH.exists():
-        try:
-            with open(CONFIG_PATH) as f:
-                saved = json.load(f)
-            merged = {**DEFAULT_CONFIG, **saved}
-            return merged
-        except (json.JSONDecodeError, IOError):
-            pass
-    return dict(DEFAULT_CONFIG)
-
-def save_config(config):
-    with open(CONFIG_PATH, "w") as f:
-        json.dump(config, f, indent=2)
-
-# ---------- Database ----------
-
-def get_db():
-    """Get a database connection."""
-    conn = sqlite3.connect(str(DB_PATH), timeout=10)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA foreign_keys=ON")
-    return conn
-
-def init_db():
-    """Create tables and set persistent PRAGMAs."""
-    conn = get_db()
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.executescript("""
-        CREATE TABLE IF NOT EXISTS sessions (
-            id TEXT PRIMARY KEY,
-            youtube_url TEXT NOT NULL,
-            video_title TEXT DEFAULT '',
-            gather_phase TEXT DEFAULT '',
-            stream_captions TEXT DEFAULT '',
-            created_at TEXT DEFAULT CURRENT_TIMESTAMP
-        );
-
-        CREATE TABLE IF NOT EXISTS clips (
-            id TEXT PRIMARY KEY,
-            session_id TEXT NOT NULL REFERENCES sessions(id),
-            note TEXT DEFAULT '',
-            center_seconds INTEGER DEFAULT 0,
-            window_seconds INTEGER DEFAULT 300,
-            start_seconds INTEGER DEFAULT 0,
-            end_seconds INTEGER DEFAULT 0,
-            status TEXT DEFAULT 'queued',
-            error_text TEXT DEFAULT '',
-            raw_file TEXT DEFAULT '',
-            transcript_json TEXT DEFAULT '',
-            ai_suggestion_start REAL,
-            ai_suggestion_end REAL,
-            ai_reasoning TEXT DEFAULT '',
-            final_start REAL,
-            final_end REAL,
-            export_file TEXT DEFAULT '',
-            suggestion_id TEXT DEFAULT '',
-            trimmed_transcript TEXT DEFAULT '',
-            generated_title TEXT DEFAULT '',
-            generated_description TEXT DEFAULT '',
-            created_at TEXT DEFAULT CURRENT_TIMESTAMP
-        );
-
-        CREATE TABLE IF NOT EXISTS suggestions (
-            id TEXT PRIMARY KEY,
-            session_id TEXT NOT NULL REFERENCES sessions(id),
-            sort_order INTEGER DEFAULT 0,
-            timestamp_seconds INTEGER DEFAULT 0,
-            suggested_title TEXT DEFAULT '',
-            reasoning TEXT DEFAULT '',
-            confidence TEXT DEFAULT 'high',
-            selected INTEGER DEFAULT 1,
-            source TEXT DEFAULT 'ai',
-            note TEXT DEFAULT '',
-            window_seconds INTEGER DEFAULT 300,
-            created_at TEXT DEFAULT CURRENT_TIMESTAMP
-        );
-    """)
-    conn.commit()
-
-    # Schema migrations — idempotent, commit once after all statements
-    # Migrations — each wrapped so re-running on an existing DB is a no-op.
-    # Columns from deleted features (edl_path, markers_path, refined_*, mode,
-    # resolve_status) are intentionally NOT dropped: SQLite can't drop columns
-    # cleanly, and leaving them harmless avoids a destructive migration.
-    for migration in [
-        "ALTER TABLE clips ADD COLUMN generated_title TEXT DEFAULT ''",
-        "ALTER TABLE clips ADD COLUMN generated_description TEXT DEFAULT ''",
-        "ALTER TABLE clips ADD COLUMN suggestion_id TEXT DEFAULT ''",
-        "ALTER TABLE clips ADD COLUMN trimmed_transcript TEXT DEFAULT ''",
-        "ALTER TABLE sessions ADD COLUMN gather_phase TEXT DEFAULT ''",
-        "ALTER TABLE sessions ADD COLUMN stream_captions TEXT DEFAULT ''",
-        "ALTER TABLE snipcut_jobs ADD COLUMN transcript_path TEXT DEFAULT ''",
-        "ALTER TABLE snipcut_jobs ADD COLUMN output_fps INTEGER DEFAULT 30",
-        "ALTER TABLE snipcut_jobs ADD COLUMN metadata_json TEXT DEFAULT ''",
-        "ALTER TABLE snipcut_jobs ADD COLUMN srt_path TEXT DEFAULT ''",
-        "ALTER TABLE snipcut_jobs ADD COLUMN resolve_script TEXT DEFAULT ''",
-    ]:
-        try:
-            conn.execute(migration)
-        except sqlite3.OperationalError as e:
-            if "duplicate column name" not in str(e):
-                raise
-    conn.commit()
-
-    # SnipCut jobs table
-    conn.executescript("""
-        CREATE TABLE IF NOT EXISTS snipcut_jobs (
-            id TEXT PRIMARY KEY,
-            input_path TEXT NOT NULL,
-            input_filename TEXT DEFAULT '',
-            status TEXT DEFAULT 'queued',
-            error_text TEXT DEFAULT '',
-            duration_seconds REAL DEFAULT 0,
-            is_vfr INTEGER DEFAULT 0,
-            width INTEGER DEFAULT 0,
-            height INTEGER DEFAULT 0,
-            cfr_output_path TEXT DEFAULT '',
-            cfr_progress REAL DEFAULT 0,
-            transcribe_progress REAL DEFAULT 0,
-            transcript_json TEXT DEFAULT '',
-            silence_gaps_json TEXT DEFAULT '',
-            cuts_json TEXT DEFAULT '',
-            analysis_reasoning TEXT DEFAULT '',
-            created_at TEXT DEFAULT CURRENT_TIMESTAMP
-        );
-    """)
-    conn.commit()
-
-    conn.close()
-
-def row_to_dict(row):
-    """Convert a sqlite3.Row to a plain dict."""
-    if row is None:
-        return None
-    return dict(row)
-
-def rows_to_list(rows):
-    return [dict(r) for r in rows]
-
-# ---------- Helpers ----------
-
-def sanitize_note(note: str) -> str:
-    """Convert a clip note to a filesystem-safe string."""
-    safe = re.sub(r'[^\w\s-]', '', note).strip()
-    safe = re.sub(r'\s+', '_', safe)
-    return safe or "clip"
-
-def get_session_output_dir(session_id: str) -> Path:
-    """Return the per-session output folder inside ClipCutter_Clips, creating it if needed.
-    Format: ~/ClipCutter_Clips/YYYY-MM-DD_Video_Title/"""
-    conn = get_db()
-    try:
-        row = conn.execute(
-            "SELECT video_title, created_at FROM sessions WHERE id = ?", (session_id,)
-        ).fetchone()
-    finally:
-        conn.close()
-
-    if row and row["video_title"]:
-        date_str = (row["created_at"] or "")[:10]  # YYYY-MM-DD
-        title_slug = sanitize_note(row["video_title"])[:50]
-        folder_name = f"{date_str}_{title_slug}" if date_str else title_slug
-    else:
-        folder_name = session_id
-
-    out = OUTPUT_DIR / folder_name
-    out.mkdir(parents=True, exist_ok=True)
-    return out
 
 def extract_trimmed_transcript(transcript_data: dict, trim_start: float, trim_end: float) -> str:
     """Return transcript text for segments that overlap the trim range."""
@@ -1173,99 +970,6 @@ def retry_clip(clip_id: str):
         except Exception:
             pass
 
-# ---------- Timestamp Parser ----------
-
-def parse_timestamp(raw: str) -> int:
-    raw = raw.strip().lower()
-
-    colon_match = re.match(r'^(\d+):(\d{1,2}):(\d{2})$', raw)
-    if colon_match:
-        h, m, s = int(colon_match.group(1)), int(colon_match.group(2)), int(colon_match.group(3))
-        return h * 3600 + m * 60 + s
-
-    colon_match2 = re.match(r'^(\d+):(\d{2})$', raw)
-    if colon_match2:
-        a, b = int(colon_match2.group(1)), int(colon_match2.group(2))
-        if a > 9:
-            return a * 60 + b
-        else:
-            return a * 3600 + b * 60
-
-    total = 0
-    hr_match = re.search(r'(\d+)\s*(?:hrs?|hours?|h)\b', raw)
-    min_match = re.search(r'(\d+)\s*(?:mins?|minutes?|m)\b', raw)
-    sec_match = re.search(r'(\d+)\s*(?:secs?|seconds?|s)\b', raw)
-
-    if hr_match or min_match or sec_match:
-        if hr_match:
-            total += int(hr_match.group(1)) * 3600
-        if min_match:
-            total += int(min_match.group(1)) * 60
-        if sec_match:
-            total += int(sec_match.group(1))
-        return total
-
-    raise ValueError(f"Could not parse timestamp: '{raw}'")
-
-
-def seconds_to_hms(s: int) -> str:
-    h = s // 3600
-    m = (s % 3600) // 60
-    sec = s % 60
-    return f"{h:02d}:{m:02d}:{sec:02d}"
-
-
-def parse_clip_entries(text: str, default_duration: int = 300) -> list:
-    clips = []
-    for line in text.strip().splitlines():
-        line = line.strip()
-        if not line or line.startswith('#'):
-            continue
-
-        duration = default_duration
-        duration_match = re.search(r'\|\s*(\d+)\s*(?:mins?|minutes?|m)\s*$', line)
-        if duration_match:
-            duration = int(duration_match.group(1)) * 60
-            line = line[:duration_match.start()].strip()
-        else:
-            duration_match_s = re.search(r'\|\s*(\d+)\s*(?:secs?|seconds?|s)\s*$', line)
-            if duration_match_s:
-                duration = int(duration_match_s.group(1))
-                line = line[:duration_match_s.start()].strip()
-
-        split_match = re.split(r'\s*[-–]\s*', line, maxsplit=1)
-        if len(split_match) == 2:
-            ts_raw, note = split_match
-        else:
-            ts_raw = split_match[0]
-            note = "clip"
-
-        try:
-            center_sec = parse_timestamp(ts_raw)
-        except ValueError:
-            continue
-
-        half = duration // 2
-        start = max(0, center_sec - half)
-        end = center_sec + half
-
-        safe_note = sanitize_note(note)
-
-        clips.append({
-            "note": note.strip(),
-            "safe_note": safe_note,
-            "center": center_sec,
-            "start": start,
-            "end": end,
-            "duration": duration,
-            "start_hms": seconds_to_hms(start),
-            "end_hms": seconds_to_hms(end),
-            "center_hms": seconds_to_hms(center_sec),
-        })
-
-    return clips
-
-
 # ---------- Download Worker ----------
 
 def run_session_downloads(session_id: str):
@@ -1374,20 +1078,6 @@ def snipcut_probe(input_path: str) -> dict:
         "is_vfr": is_vfr,
         "size_mb": os.path.getsize(input_path) / (1024 * 1024),
     }
-
-
-def _snipcut_update(job_id: str, **fields):
-    """Update a snipcut job's fields in DB."""
-    if not fields:
-        return
-    conn = get_db()
-    try:
-        cols = ", ".join(f"{k} = ?" for k in fields.keys())
-        values = list(fields.values()) + [job_id]
-        conn.execute(f"UPDATE snipcut_jobs SET {cols} WHERE id = ?", values)
-        conn.commit()
-    finally:
-        conn.close()
 
 
 def snipcut_convert_cfr(input_path: str, output_path: str, job_id: str, target_fps: int = 30) -> tuple:
@@ -2143,7 +1833,7 @@ def api_create_session():
     local_file = ""
     if raw_local:
         try:
-            local_file = str(_resolve_user_path(raw_local))
+            local_file = str(resolve_user_path(raw_local))
         except FileNotFoundError as e:
             return jsonify({"error": f"File not found: {e}"}), 400
 
@@ -2703,7 +2393,7 @@ def api_snipcut_create():
         return jsonify({"error": "input_path required"}), 400
 
     try:
-        resolved = _resolve_user_path(raw_input)
+        resolved = resolve_user_path(raw_input)
     except FileNotFoundError as e:
         return jsonify({"error": f"File not found: {e}"}), 400
 

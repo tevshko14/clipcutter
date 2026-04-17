@@ -57,8 +57,8 @@ else
 fi
 
 # Copy app files
-cp -f "$REPO_DIR/clipcutter.py" "$INSTALL_DIR/clipcutter.py"
-cp -f "$REPO_DIR/index.html"    "$INSTALL_DIR/index.html"
+cp -f "$REPO_DIR"/*.py "$INSTALL_DIR/"
+cp -f "$REPO_DIR/index.html" "$INSTALL_DIR/index.html"
 
 # Set up venv
 if [ ! -f "$VENV_DIR/bin/python" ]; then
@@ -95,8 +95,8 @@ exec > "$INSTALL_DIR/launch.log" 2>&1
 if [ -d "$REPO_DIR/.git" ]; then
     cd "$REPO_DIR"
     git pull --ff-only origin main 2>/dev/null || true
-    cp -f "$REPO_DIR/clipcutter.py" "$INSTALL_DIR/clipcutter.py"
-    cp -f "$REPO_DIR/index.html"    "$INSTALL_DIR/index.html"
+    cp -f "$REPO_DIR"/*.py "$INSTALL_DIR/"
+    cp -f "$REPO_DIR/index.html" "$INSTALL_DIR/index.html"
     # Update icon if it changed
     if [ -f "$REPO_DIR/icon.icns" ]; then
         APP_RES="$(find "$HOME/Desktop" -name "ClipCutter*.app" -maxdepth 1 2>/dev/null | head -1)/Contents/Resources"
