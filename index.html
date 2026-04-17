@@ -1541,6 +1541,26 @@ function toast(msg, duration) {
   setTimeout(() => t.classList.remove('show'), duration || 4000);
 }
 
+// Thin wrapper around fetch for JSON requests to the local Flask backend.
+// Usage: await api('GET', '/api/config')
+//        await api('POST', '/api/foo', {bar: 1})
+// Returns the parsed JSON body. On non-JSON responses (HTML error pages,
+// 5xx, network tunnel issues) returns {error: '...'} so callers' existing
+// `if (d.error)` checks surface the problem instead of silently succeeding.
+async function api(method, url, data) {
+  const opts = { method };
+  if (data !== undefined) {
+    opts.headers = { 'Content-Type': 'application/json' };
+    opts.body = JSON.stringify(data);
+  }
+  const r = await fetch(url, opts);
+  const ct = r.headers.get('content-type') || '';
+  if (ct.includes('application/json')) {
+    return r.json();
+  }
+  return { error: `Unexpected response (${r.status} ${ct || 'no content-type'})` };
+}
+
 function timeAgo(dateStr) {
   const d = new Date(dateStr + 'Z');
   const now = new Date();
@@ -1591,8 +1611,7 @@ function switchView(name) {
       b.innerHTML = '&#9888;&#65039; <div>Missing: <strong>' + d.missing.join(', ') + '</strong>. Install with ' + cmds + ' then relaunch.</div>';
     }
     // Show welcome hint or recent sessions on New Session screen
-    const sessRes = await fetch('/api/sessions');
-    const sessData = await sessRes.json();
+    const sessData = await api('GET', '/api/sessions');
     if (!sessData.sessions || sessData.sessions.length === 0) {
       const hint = $('welcomeHint');
       if (hint) hint.style.display = 'flex';
@@ -1601,8 +1620,7 @@ function switchView(name) {
     }
 
     // Check for a pending file from "Open With → ClipCutter"
-    const pendingRes = await fetch('/api/snipcut/pending-file');
-    const pendingData = await pendingRes.json();
+    const pendingData = await api('GET', '/api/snipcut/pending-file');
     if (pendingData.path) {
       switchView('snipcut');
       toast('Starting SnipCut job…');
@@ -1610,8 +1628,7 @@ function switchView(name) {
     }
 
     // Check for a pending session from clipcutter:// URL (StreamBuddy handoff)
-    const sessionRes = await fetch('/api/pending-session');
-    const sessionData = await sessionRes.json();
+    const sessionData = await api('GET', '/api/pending-session');
     if (sessionData.youtube_url) {
       populatePendingSession(sessionData);
     }
@@ -1671,8 +1688,7 @@ function togglePasteSection() {
 
 async function pickLocalFile() {
   try {
-    const r = await fetch('/api/snipcut/pick-file', { method: 'POST' });
-    const d = await r.json();
+    const d = await api('POST', '/api/snipcut/pick-file');
     if (d.error) { toast(d.error); return; }
     if (d.cancelled || !d.path) return;
     localFilePath = d.path;
@@ -1701,7 +1717,7 @@ async function fetchFromStreamBuddy() {
   if (btn) { btn.disabled = true; btn.textContent = 'Fetching…'; }
   openSbPicker();
   try {
-    const cfg = await (await fetch('/api/config')).json();
+    const cfg = await api('GET', '/api/config');
     const baseUrl = cfg.streambuddy_url || '';
     const token = cfg.streambuddy_token || '';
     if (!baseUrl) {
@@ -1709,12 +1725,7 @@ async function fetchFromStreamBuddy() {
       closeSbPicker();
       return;
     }
-    const r = await fetch('/api/fetch-from-streambuddy', {
-      method: 'POST',
-      headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({base_url: baseUrl, token}),
-    });
-    const d = await r.json();
+    const d = await api('POST', '/api/fetch-from-streambuddy', {base_url: baseUrl, token});
     if (d.error) {
       $('sbPickerList').innerHTML = `<div style="color:var(--red);font-size:12px;padding:20px;text-align:center;">${esc(d.error)}</div>`;
       return;
@@ -1781,12 +1792,7 @@ async function startSessionWithTimestamps() {
   btn.textContent = localFilePath ? 'Extracting clips…' : 'Starting...';
 
   try {
-    const r = await fetch('/api/sessions', {
-      method: 'POST',
-      headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({url, text, local_file: localFilePath}),
-    });
-    const d = await r.json();
+    const d = await api('POST', '/api/sessions', {url, text, local_file: localFilePath});
     if (d.error) { toast(d.error); return; }
 
     currentSessionId = d.session_id;
@@ -1813,12 +1819,7 @@ async function startSession() {
   $('startBtn').textContent = 'Starting...';
 
   try {
-    const r = await fetch('/api/sessions', {
-      method: 'POST',
-      headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({url}),
-    });
-    const d = await r.json();
+    const d = await api('POST', '/api/sessions', {url});
     if (d.error) { toast(d.error); return; }
 
     currentSessionId = d.session_id;
@@ -1837,8 +1838,7 @@ async function startSession() {
 // ── Load & render session ──
 async function loadSession(sessionId) {
   try {
-    const r = await fetch(`/api/sessions/${sessionId}`);
-    const session = await r.json();
+    const session = await api('GET', `/api/sessions/${sessionId}`);
     if (session.error) { toast(session.error); return; }
 
     currentSessionId = sessionId;
@@ -1858,8 +1858,7 @@ async function renderSession(session) {
     renderScanState(session);
   } else if (phase === 'selecting' || phase === 'no_captions') {
     stopPolling();
-    const r2 = await fetch(`/api/sessions/${session.id}/suggestions`);
-    const d = await r2.json();
+    const d = await api('GET', `/api/sessions/${session.id}/suggestions`);
     renderSuggestionsPanel(session, d.suggestions || []);
   } else if (phase === 'error') {
     stopPolling();
@@ -2026,7 +2025,7 @@ function renderAiCard(clip) {
 }
 
 async function reAnalyze(clipId) {
-  await fetch(`/api/clips/${clipId}/analyze`, { method: 'POST' });
+  await api('POST', `/api/clips/${clipId}/analyze`);
   // Clear cache so transcript reloads with new highlight
   delete transcriptCache[clipId];
   if (currentSessionId) loadSession(currentSessionId);
@@ -2079,8 +2078,7 @@ async function generateCopy(clipId) {
   if (initBtn) { initBtn.disabled = true; initBtn.textContent = '...'; }
 
   try {
-    const r = await fetch(`/api/clips/${clipId}/generate-copy`, { method: 'POST' });
-    const d = await r.json();
+    const d = await api('POST', `/api/clips/${clipId}/generate-copy`);
     if (d.error) { toast(d.error); return; }
 
     if (clipDataCache[clipId]) {
@@ -2120,11 +2118,7 @@ function saveCopyEdits(clipId) {
       clipDataCache[clipId].generated_title = title;
       clipDataCache[clipId].generated_description = description;
     }
-    await fetch(`/api/clips/${clipId}/copy`, {
-      method: 'PUT',
-      headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({title, description}),
-    });
+    await api('PUT', `/api/clips/${clipId}/copy`, {title, description});
   }, 600);
 }
 
@@ -2195,8 +2189,7 @@ async function loadTranscript(clipId, clipNote, aiStart, aiEnd) {
   panel.innerHTML = `<div class="transcript-panel"><div style="padding:16px;color:var(--text-dim);font-size:12px;">Loading transcript...</div></div>`;
 
   try {
-    const r = await fetch(`/api/clips/${clipId}/transcript`);
-    const data = await r.json();
+    const data = await api('GET', `/api/clips/${clipId}/transcript`);
     if (data.error) {
       panel.innerHTML = `<div class="transcript-panel"><div style="padding:16px;color:var(--text-dimmer);font-size:12px;">${esc(data.error)}</div></div>`;
       return;
@@ -2363,11 +2356,7 @@ function trimUseAi() {
 
 async function trimSave() {
   if (!trimState) return;
-  await fetch(`/api/clips/${trimState.clipId}/trim`, {
-    method: 'PUT',
-    headers: {'Content-Type':'application/json'},
-    body: JSON.stringify({start: trimState.start, end: trimState.end}),
-  });
+  await api('PUT', `/api/clips/${trimState.clipId}/trim`, {start: trimState.start, end: trimState.end});
   toast('Trim saved');
 }
 
@@ -2380,36 +2369,24 @@ function getExportOptions() {
 
 async function exportClip(clipId) {
   if (trimState && trimState.clipId === clipId) await trimSave();
-  await fetch(`/api/clips/${clipId}/export`, {
-    method: 'POST',
-    headers: {'Content-Type':'application/json'},
-    body: JSON.stringify(getExportOptions()),
-  });
+  await api('POST', `/api/clips/${clipId}/export`, getExportOptions());
   trimState = null;
   toast('Export started');
   if (currentSessionId) { startPolling(currentSessionId); loadSession(currentSessionId); }
 }
 
 async function exportAll(sessionId) {
-  await fetch(`/api/sessions/${sessionId}/export-all`, {
-    method: 'POST',
-    headers: {'Content-Type':'application/json'},
-    body: JSON.stringify(getExportOptions()),
-  });
+  await api('POST', `/api/sessions/${sessionId}/export-all`, getExportOptions());
   toast('Batch export started');
   if (currentSessionId) { startPolling(currentSessionId); loadSession(currentSessionId); }
 }
 
 async function openExportFolder() {
-  await fetch('/api/open-folder', {
-    method: 'POST',
-    headers: {'Content-Type':'application/json'},
-    body: JSON.stringify({}),
-  });
+  await api('POST', '/api/open-folder', {});
 }
 
 async function retryClip(clipId) {
-  await fetch(`/api/clips/${clipId}/retry`, { method: 'POST' });
+  await api('POST', `/api/clips/${clipId}/retry`);
   toast('Retrying clip');
   if (currentSessionId) { startPolling(currentSessionId); loadSession(currentSessionId); }
 }
@@ -2421,8 +2398,7 @@ let waveformDims = null; // {w, h, dpr} — cached canvas dimensions
 
 async function loadWaveform(clipId) {
   try {
-    const r = await fetch(`/api/clips/${clipId}/waveform`);
-    waveformData = await r.json();
+    waveformData = await api('GET', `/api/clips/${clipId}/waveform`);
     waveformBaseImage = null;
     drawWaveform();
   } catch(e) { waveformData = null; }
@@ -2655,11 +2631,7 @@ document.addEventListener('keydown', (e) => {
 });
 
 async function openSessionFolder(sessionId) {
-  await fetch('/api/open-folder', {
-    method: 'POST',
-    headers: {'Content-Type':'application/json'},
-    body: JSON.stringify({session_id: sessionId}),
-  });
+  await api('POST', '/api/open-folder', {session_id: sessionId});
 }
 
 // ── Polling ──
@@ -2667,8 +2639,7 @@ function startPolling(sessionId) {
   stopPolling();
   pollTimer = setInterval(async () => {
     try {
-      const r = await fetch(`/api/sessions/${sessionId}`);
-      const session = await r.json();
+      const session = await api('GET', `/api/sessions/${sessionId}`);
       if (session.error) return;
 
       const phase = session.gather_phase || '';
@@ -2812,16 +2783,11 @@ function getYtTimestamps() {
 }
 
 async function toggleSuggestion(suggId, selected, sessionId) {
-  await fetch(`/api/suggestions/${suggId}`, {
-    method: 'PUT',
-    headers: {'Content-Type':'application/json'},
-    body: JSON.stringify({selected}),
-  });
+  await api('PUT', `/api/suggestions/${suggId}`, {selected});
   // Update local state without re-fetching
   const s = currentSuggestions.find(x => x.id === suggId);
   if (s) s.selected = selected ? 1 : 0;
-  const r = await fetch(`/api/sessions/${sessionId}`);
-  const session = await r.json();
+  const session = await api('GET', `/api/sessions/${sessionId}`);
   renderSuggestionsPanel(session, currentSuggestions);
 }
 
@@ -2830,30 +2796,23 @@ async function addManualSegment(sessionId) {
   const note = $('segNote').value.trim();
   if (!timestamp) { toast('Enter a timestamp'); return; }
 
-  const r = await fetch(`/api/sessions/${sessionId}/add-segment`, {
-    method: 'POST',
-    headers: {'Content-Type':'application/json'},
-    body: JSON.stringify({timestamp, note}),
-  });
-  const d = await r.json();
+  const d = await api('POST', `/api/sessions/${sessionId}/add-segment`, {timestamp, note});
   if (d.error) { toast(d.error); return; }
 
   currentSuggestions.push(d.suggestion);
-  const sr = await fetch(`/api/sessions/${sessionId}`);
-  const session = await sr.json();
+  const session = await api('GET', `/api/sessions/${sessionId}`);
   renderSuggestionsPanel(session, currentSuggestions);
 }
 
 async function deleteSegment(sessionId, suggId) {
-  await fetch(`/api/sessions/${sessionId}/segments/${suggId}`, {method: 'DELETE'});
+  await api('DELETE', `/api/sessions/${sessionId}/segments/${suggId}`);
   currentSuggestions = currentSuggestions.filter(s => s.id !== suggId);
-  const r = await fetch(`/api/sessions/${sessionId}`);
-  const session = await r.json();
+  const session = await api('GET', `/api/sessions/${sessionId}`);
   renderSuggestionsPanel(session, currentSuggestions);
 }
 
 async function gatherSession(sessionId) {
-  await fetch(`/api/sessions/${sessionId}/gather`, {method: 'POST'});
+  await api('POST', `/api/sessions/${sessionId}/gather`);
   currentSuggestions = [];
   startPolling(sessionId);
   loadSession(sessionId);
@@ -2865,11 +2824,7 @@ const SNIPCUT_DONE_STATUSES = ['done', 'error'];
 
 function snipcutStartFromPath(path) {
   if (!path || !path.trim()) { toast('Enter a file path'); return; }
-  fetch('/api/snipcut/jobs', {
-    method: 'POST',
-    headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({ input_path: path.trim() }),
-  }).then(r => r.json()).then(d => {
+  api('POST', '/api/snipcut/jobs', { input_path: path.trim() }).then(d => {
     if (d.error) { toast(d.error); return; }
     loadSnipcutJobs();
     startSnipcutPolling();
@@ -2878,8 +2833,7 @@ function snipcutStartFromPath(path) {
 
 async function snipcutPickFile() {
   try {
-    const r = await fetch('/api/snipcut/pick-file', { method: 'POST' });
-    const d = await r.json();
+    const d = await api('POST', '/api/snipcut/pick-file');
     if (d.error) { toast(d.error); return; }
     if (d.cancelled || !d.path) return;
     snipcutStartFromPath(d.path);
@@ -2895,8 +2849,7 @@ function snipcutSubmitPath() {
 
 async function loadSnipcutJobs() {
   try {
-    const r = await fetch('/api/snipcut/jobs');
-    const d = await r.json();
+    const d = await api('GET', '/api/snipcut/jobs');
     const list = $('snipcutRecentList');
     if (!list) return;
     const jobs = d.jobs || [];
@@ -3077,8 +3030,7 @@ function renderSnipcutJobCard(j) {
 }
 
 async function snipcutRetry(jobId) {
-  const r = await fetch(`/api/snipcut/jobs/${jobId}/retry`, { method: 'POST' });
-  const d = await r.json();
+  const d = await api('POST', `/api/snipcut/jobs/${jobId}/retry`);
   if (d.error) { toast(d.error); return; }
   toast('Resuming from checkpoint…');
   startSnipcutPolling();
@@ -3086,19 +3038,18 @@ async function snipcutRetry(jobId) {
 }
 
 async function snipcutCleanup(jobId) {
-  await fetch(`/api/snipcut/jobs/${jobId}/cleanup`, { method: 'POST' });
+  await api('POST', `/api/snipcut/jobs/${jobId}/cleanup`);
   toast('Transcript data cleared from DB');
   loadSnipcutJobs();
 }
 
 async function snipcutDelete(jobId) {
-  await fetch(`/api/snipcut/jobs/${jobId}`, { method: 'DELETE' });
+  await api('DELETE', `/api/snipcut/jobs/${jobId}`);
   loadSnipcutJobs();
 }
 
 async function snipcutSendToResolve(jobId) {
-  const r = await fetch(`/api/snipcut/jobs/${jobId}/open-resolve`, { method: 'POST' });
-  const d = await r.json();
+  const d = await api('POST', `/api/snipcut/jobs/${jobId}/open-resolve`);
   if (d.error) { toast(d.error); return; }
   toast('Script copied! In Resolve: Workspace → Console → ⌘V → Enter', 8000);
 }
@@ -3106,11 +3057,7 @@ async function snipcutSendToResolve(jobId) {
 async function snipcutRevealFile(filePath) {
   // Reveal in Finder by opening the containing folder
   const folder = filePath.substring(0, filePath.lastIndexOf('/'));
-  await fetch('/api/open-folder', {
-    method: 'POST',
-    headers: {'Content-Type':'application/json'},
-    body: JSON.stringify({path: folder}),
-  });
+  await api('POST', '/api/open-folder', {path: folder});
 }
 
 function startSnipcutPolling() {
@@ -3174,8 +3121,7 @@ let historyExpandedGroups = new Set(); // track which sessions are expanded
 
 async function loadHistory() {
   try {
-    const r = await fetch('/api/sessions');
-    const d = await r.json();
+    const d = await api('GET', '/api/sessions');
 
     if (!d.sessions || d.sessions.length === 0) {
       $('historyContent').innerHTML = EMPTY_HISTORY;
@@ -3270,8 +3216,7 @@ function openClipInSession(sessionId, clipId) {
 
 async function deleteClip(clipId) {
   try {
-    const r = await fetch(`/api/clips/${clipId}`, { method: 'DELETE' });
-    const d = await r.json();
+    const d = await api('DELETE', `/api/clips/${clipId}`);
     if (d.error) { toast(d.error); return; }
     toast('Clip deleted');
     loadHistory();
@@ -3280,7 +3225,7 @@ async function deleteClip(clipId) {
 
 async function deleteSession(sessionId) {
   try {
-    await fetch(`/api/sessions/${sessionId}`, { method: 'DELETE' });
+    await api('DELETE', `/api/sessions/${sessionId}`);
     historyExpandedGroups.delete(sessionId);
     loadHistory();
     if (currentSessionId === sessionId) {
@@ -3293,8 +3238,7 @@ async function deleteSession(sessionId) {
 // ── Settings ──
 async function openSettings() {
   try {
-    const r = await fetch('/api/config');
-    const config = await r.json();
+    const config = await api('GET', '/api/config');
     $('settingsApiKey').value = '';
     $('settingsApiKey').placeholder = config.has_api_key ? config.api_key_preview : 'sk-ant-...';
     $('settingsChannelProfile').value = config.channel_profile || '';
@@ -3322,11 +3266,7 @@ async function saveSettings() {
   if (apiKey) updates.api_key = apiKey;
 
   try {
-    await fetch('/api/config', {
-      method: 'PUT',
-      headers: {'Content-Type':'application/json'},
-      body: JSON.stringify(updates),
-    });
+    await api('PUT', '/api/config', updates);
     if (apiKey) hasApiKey = true;
     closeSettings();
     toast('Settings saved');

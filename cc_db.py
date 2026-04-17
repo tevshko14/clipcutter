@@ -7,16 +7,28 @@ get_db() and close it themselves.
 
 import re
 import sqlite3
+from contextlib import contextmanager
 
 from cc_config import DB_PATH, OUTPUT_DIR
 
 
 def get_db():
-    """Open a new connection with FK enforcement and Row factory."""
+    """Open a new connection with FK enforcement and Row factory.
+    Caller is responsible for closing it (or use with_db() context manager)."""
     conn = sqlite3.connect(str(DB_PATH), timeout=10)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys=ON")
     return conn
+
+
+@contextmanager
+def with_db():
+    """Context manager that yields a connection and guarantees close()."""
+    conn = get_db()
+    try:
+        yield conn
+    finally:
+        conn.close()
 
 
 def row_to_dict(row):
@@ -154,13 +166,10 @@ def _sanitize_folder_name(raw: str) -> str:
 def get_session_output_dir(session_id: str):
     """Return the per-session output folder inside ClipCutter_Clips, creating
     it if needed. Format: ~/ClipCutter_Clips/YYYY-MM-DD_Video_Title/"""
-    conn = get_db()
-    try:
+    with with_db() as conn:
         row = conn.execute(
             "SELECT video_title, created_at FROM sessions WHERE id = ?", (session_id,)
         ).fetchone()
-    finally:
-        conn.close()
 
     if row and row["video_title"]:
         date_str = (row["created_at"] or "")[:10]  # YYYY-MM-DD
@@ -178,11 +187,8 @@ def snipcut_update(job_id: str, **fields):
     """Update a snipcut job's fields in DB. No-op if fields is empty."""
     if not fields:
         return
-    conn = get_db()
-    try:
+    with with_db() as conn:
         cols = ", ".join(f"{k} = ?" for k in fields.keys())
         values = list(fields.values()) + [job_id]
         conn.execute(f"UPDATE snipcut_jobs SET {cols} WHERE id = ?", values)
         conn.commit()
-    finally:
-        conn.close()
