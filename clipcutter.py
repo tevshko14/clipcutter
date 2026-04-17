@@ -83,6 +83,7 @@ from cc_helpers import (
     sanitize_note, resolve_user_path,
     parse_timestamp, seconds_to_hms, parse_clip_entries,
 )
+from cc_log import log
 
 app = Flask(__name__)
 
@@ -305,10 +306,9 @@ def download_clip(clip_id: str, url: str):
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
         combined_output = (result.stdout or "") + (result.stderr or "")
         if result.returncode != 0:
-            print(f"  Download failed (rc={result.returncode}). Output tail: {combined_output[-300:]}")
+            log.warning("Download failed (rc=%s). Output tail: %s", result.returncode, combined_output[-300:])
             if "could not open encoder" in combined_output.lower() or "aac" in combined_output.lower():
-                # AAC encoder failure — retry with simpler download approach
-                print(f"  Retrying: single-format download, no keyframe forcing")
+                log.info("Retrying download: single-format, no keyframe forcing (AAC encoder error)")
                 # Clean up partial file from failed attempt
                 if output_path.exists():
                     try: output_path.unlink()
@@ -323,7 +323,7 @@ def download_clip(clip_id: str, url: str):
                 ]
                 result = subprocess.run(cmd_retry, capture_output=True, text=True, timeout=600)
                 if result.returncode != 0:
-                    print(f"  Retry also failed: {(result.stdout or '')[-200:]}{(result.stderr or '')[-200:]}")
+                    log.error("Retry also failed: %s%s", (result.stdout or '')[-200:], (result.stderr or '')[-200:])
 
         if result.returncode == 0:
             conn.execute(
@@ -485,10 +485,10 @@ def get_whisper_model():
             if _whisper_model is None or _whisper_model_name != requested:
                 import whisper
                 models_dir = str(APP_DIR / "whisper_models")
-                print(f"  Loading Whisper model: {requested}...")
+                log.info("Loading Whisper model: %s", requested)
                 _whisper_model = whisper.load_model(requested, download_root=models_dir)
                 _whisper_model_name = requested
-                print(f"  Whisper model ready.")
+                log.info("Whisper model ready")
     return _whisper_model
 
 _whisper_inference_lock = threading.Lock()
@@ -507,7 +507,7 @@ def _run_whisper(audio_path: str, model_name: str = None) -> dict:
             return model.transcribe(audio_path, word_timestamps=True, language="en")
         except RuntimeError as e:
             if "size of tensor" in str(e) and model_name != "base":
-                print(f"  Whisper {model_name} failed with tensor error, retrying with base...")
+                log.warning("Whisper %s failed with tensor error, retrying with base", model_name)
                 fallback = whisper.load_model("base", download_root=models_dir)
                 return fallback.transcribe(audio_path, word_timestamps=True, language="en")
             raise
@@ -703,7 +703,7 @@ Respond in JSON only, no other text:
         conn.commit()
         return title, description
     except Exception as e:
-        print(f"  Copy generation failed: {e}")
+        log.exception("Copy generation failed: %s", e)
         return None
     finally:
         conn.close()
@@ -842,7 +842,7 @@ def export_clip(clip_id: str, captions: bool = True, vertical: bool = True):
             )
         else:
             error_msg = result.stderr[-500:] if result.stderr else "ffmpeg export failed"
-            print(f"  Export error: {error_msg}")
+            log.error("Export failed: %s", error_msg)
             conn.execute(
                 "UPDATE clips SET status = 'ready', error_text = ? WHERE id = ?",
                 (f"Export failed: {error_msg[:400]}", clip_id)
@@ -1145,10 +1145,10 @@ def _get_faster_whisper():
             if _faster_whisper_model is None:
                 from faster_whisper import WhisperModel
                 models_dir = str(APP_DIR / "faster_whisper_models")
-                print("  Loading faster-whisper medium model...")
+                log.info("Loading faster-whisper medium model")
                 _faster_whisper_model = WhisperModel("medium", device="cpu", compute_type="int8",
                                                      download_root=models_dir)
-                print("  faster-whisper ready.")
+                log.info("faster-whisper ready")
     return _faster_whisper_model
 
 
@@ -1235,7 +1235,7 @@ If nothing needs cutting, return: []"""
             result = json.loads(cleaned)
             return result if isinstance(result, list) else result.get("cuts", [])
         except json.JSONDecodeError:
-            print(f"  SnipCut: JSON parse failed for chunk. Response: {text[:200]}")
+            log.error("SnipCut: JSON parse failed for chunk. Response: %s", text[:200])
             return []
 
 
@@ -1265,7 +1265,8 @@ def snipcut_analyze(words: list, api_key: str) -> dict:
 
     all_cuts = []
     for i, chunk in enumerate(chunks):
-        print(f"  SnipCut: analyzing chunk {i+1}/{len(chunks)} ({len(chunk)} words, {chunk[0]['start']:.0f}s-{chunk[-1]['end']:.0f}s)")
+        log.info("SnipCut: analyzing chunk %d/%d (%d words, %.0fs-%.0fs)",
+                 i + 1, len(chunks), len(chunk), chunk[0]['start'], chunk[-1]['end'])
         cuts = _snipcut_analyze_chunk(chunk, api_key)
         all_cuts.extend(cuts)
 
@@ -1323,7 +1324,7 @@ Respond with a JSON object ONLY — no markdown, no explanation:
         if isinstance(result, dict) and "title" in result:
             return result
     except Exception as e:
-        print(f"  SnipCut: metadata generation failed: {e}")
+        log.exception("SnipCut: metadata generation failed: %s", e)
     return {}
 
 
@@ -1596,11 +1597,11 @@ def snipcut_finalize_outputs(job_id: str, input_path: str, cfr_output: str,
         cfr_info = snipcut_probe(cfr_output)
         actual_fps = round(cfr_info["fps"]) or output_fps
         if actual_fps != output_fps:
-            print(f"  SnipCut: CFR file is {actual_fps}fps (expected {output_fps}) — using actual")
+            log.info("SnipCut: CFR file is %dfps (expected %d) — using actual", actual_fps, output_fps)
             output_fps = actual_fps
             _snipcut_update(job_id, output_fps=output_fps)
     except Exception as e:
-        print(f"  SnipCut: couldn't re-probe CFR ({e}), using {output_fps}fps")
+        log.warning("SnipCut: couldn't re-probe CFR (%s), using %dfps", e, output_fps)
 
     merged_cuts = snipcut_merge_cuts(ai_cuts, silence_gaps)
     title = Path(input_path).stem
@@ -1650,7 +1651,7 @@ def snipcut_process(job_id: str):
         if has_probe:
             info = {"duration": job["duration_seconds"], "is_vfr": bool(job["is_vfr"]),
                     "width": job["width"], "height": job["height"]}
-            print(f"  SnipCut: resuming — probe data exists ({info['duration']:.0f}s)")
+            log.info("SnipCut: resuming — probe data exists (%.0fs)", info['duration'])
         else:
             _snipcut_update(job_id, status="probing")
             info = snipcut_probe(input_path)
@@ -1676,19 +1677,19 @@ def snipcut_process(job_id: str):
                     _snipcut_update(job_id, output_fps=output_fps)
                 except Exception:
                     pass
-            print(f"  SnipCut: resuming — CFR + transcript exist ({len(words)} words, {output_fps}fps)")
+            log.info("SnipCut: resuming — CFR + transcript exist (%d words, %dfps)", len(words), output_fps)
         else:
             # Need to run at least one of CFR or transcribe
             _snipcut_update(job_id, status="processing")
 
             if has_cfr:
                 cfr_output = job["cfr_output_path"]
-                print(f"  SnipCut: resuming — CFR exists, only transcribing")
+                log.info("SnipCut: resuming — CFR exists, only transcribing")
             elif os.path.exists(cfr_output):
                 # CFR file exists on disk but wasn't recorded in DB
                 _snipcut_update(job_id, cfr_output_path=cfr_output, cfr_progress=100.0)
                 has_cfr = True
-                print(f"  SnipCut: found existing CFR file, skipping conversion")
+                log.info("SnipCut: found existing CFR file, skipping conversion")
 
             # If CFR already exists (by any means), probe it for fps
             if has_cfr and not job.get("output_fps"):
@@ -1732,7 +1733,7 @@ def snipcut_process(job_id: str):
         has_silence = job["silence_gaps_json"] and len(job["silence_gaps_json"]) > 2
         if has_silence:
             silence_gaps = json.loads(job["silence_gaps_json"])
-            print(f"  SnipCut: resuming — silence gaps exist ({len(silence_gaps)} gaps)")
+            log.info("SnipCut: resuming — silence gaps exist (%d gaps)", len(silence_gaps))
         else:
             silence_gaps = snipcut_detect_silence(words, threshold=2.5)
             _snipcut_update(job_id, silence_gaps_json=json.dumps(silence_gaps))
@@ -1741,7 +1742,7 @@ def snipcut_process(job_id: str):
         has_cuts = job["cuts_json"] and len(job["cuts_json"]) > 2
         if has_cuts:
             ai_cuts = json.loads(job["cuts_json"])
-            print(f"  SnipCut: resuming — AI cuts exist ({len(ai_cuts)} cuts)")
+            log.info("SnipCut: resuming — AI cuts exist (%d cuts)", len(ai_cuts))
         else:
             _snipcut_update(job_id, status="analyzing")
             api_key = load_config().get("api_key", "")
@@ -1758,7 +1759,7 @@ def snipcut_process(job_id: str):
             metadata = snipcut_generate_metadata(words, api_key)
             if metadata:
                 _snipcut_update(job_id, metadata_json=json.dumps(metadata))
-                print(f"  SnipCut: generated metadata — {metadata.get('title', '')[:60]}")
+                log.info("SnipCut: generated metadata — %s", metadata.get('title', '')[:60])
 
         _snipcut_update(job_id, status="generating_outputs")
         paths = snipcut_finalize_outputs(
@@ -2070,7 +2071,7 @@ def api_clip_waveform(clip_id):
     try:
         result = subprocess.run(cmd, capture_output=True, timeout=30)
         if result.returncode != 0:
-            print(f"  ffmpeg waveform error: {result.stderr.decode(errors='replace')[:500]}")
+            log.error("ffmpeg waveform error: %s", result.stderr.decode(errors='replace')[:500])
             return jsonify({"error": "ffmpeg waveform extraction failed"}), 500
     except (FileNotFoundError, subprocess.TimeoutExpired):
         return jsonify({"error": "ffmpeg not available"}), 500
@@ -2634,7 +2635,7 @@ def _parse_clipcutter_url(url: str) -> dict:
     # Size cap guards against accidental or hostile giant payloads that
     # would hang base64 decoding or json parsing before validation.
     if len(url) > _CLIPCUTTER_URL_MAX_LEN:
-        print(f"  clipcutter:// URL exceeds {_CLIPCUTTER_URL_MAX_LEN} bytes, ignoring")
+        log.warning("clipcutter:// URL exceeds %d bytes, ignoring", _CLIPCUTTER_URL_MAX_LEN)
         return {}
 
     try:
@@ -2672,7 +2673,7 @@ def _parse_clipcutter_url(url: str) -> dict:
                 timestamps = unquote(ts_raw)
         return {"youtube_url": yt, "timestamps": timestamps, "title": title}
     except Exception as e:
-        print(f"  URL parse error: {e}")
+        log.error("URL parse error: %s", e)
         return {}
 
 
@@ -2697,10 +2698,10 @@ def main():
             if session.get("youtube_url"):
                 _pending_session.update(session)
                 _pending_session["consumed"] = False
-                print(f"  Queued StreamBuddy session: {session.get('title') or session['youtube_url']}")
+                log.info("Queued StreamBuddy session: %s", session.get('title') or session['youtube_url'])
         elif os.path.isfile(candidate) and candidate.lower().endswith(SUPPORTED_VIDEO_EXTS):
             _pending_file["path"] = os.path.abspath(candidate)
-            print(f"  Queued for SnipCut: {Path(candidate).name}")
+            log.info("Queued for SnipCut: %s", Path(candidate).name)
 
     missing = check_system_deps()
     if missing:
