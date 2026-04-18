@@ -1258,6 +1258,22 @@ def api_open_folder():
     return jsonify({"ok": True})
 
 
+@app.route("/api/open-url", methods=["POST"])
+def api_open_url():
+    """Open an external URL in the user's default browser."""
+    data = request.json or {}
+    url = (data.get("url") or "").strip()
+    if not url.startswith(("http://", "https://")):
+        return jsonify({"error": "http(s) URL required"}), 400
+    if sys.platform == "darwin":
+        subprocess.Popen(["open", url])
+    elif sys.platform == "win32":
+        subprocess.Popen(["cmd", "/c", "start", url], shell=False)
+    else:
+        subprocess.Popen(["xdg-open", url])
+    return jsonify({"ok": True})
+
+
 # ---------- SnipCut Routes ----------
 
 @app.route("/api/snipcut/jobs", methods=["POST"])

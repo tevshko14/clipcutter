@@ -987,6 +987,7 @@
       <div class="logo-text">ClipCutter</div>
     </div>
     <div class="header-actions">
+      <button class="icon-btn" onclick="openStreamBuddy()" title="Open StreamBuddy in browser">&#128253;</button>
       <button class="icon-btn" onclick="openSettings()" title="Settings">&#9881;</button>
     </div>
   </div>
@@ -2225,6 +2226,23 @@ async function deleteSession(sessionId) {
 }
 
 // ── Settings ──
+async function openStreamBuddy() {
+  try {
+    const cfg = await api('GET', '/api/config');
+    const url = (cfg.streambuddy_url || '').trim();
+    if (!url) {
+      toast('Set StreamBuddy URL in Settings first');
+      openSettings();
+      return;
+    }
+    // pywebview doesn't support window.open across all backends. Use the
+    // native helper that maps to macOS `open` command.
+    await api('POST', '/api/open-url', {url});
+  } catch (e) {
+    toast('Could not open StreamBuddy');
+  }
+}
+
 async function openSettings() {
   try {
     const config = await api('GET', '/api/config');
