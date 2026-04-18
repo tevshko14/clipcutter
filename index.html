@@ -446,312 +446,6 @@
     margin-top: 6px;
   }
 
-  /* ── Copy Panel ── */
-  .copy-panel {
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    margin-top: 8px;
-    padding: 14px 16px;
-  }
-  .copy-panel-header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    margin-bottom: 12px;
-  }
-  .copy-panel-label {
-    font-family: var(--mono);
-    font-size: 10px;
-    font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: 1.5px;
-    color: var(--accent);
-  }
-  .copy-field { margin-bottom: 10px; }
-  .copy-field:last-child { margin-bottom: 0; }
-  .copy-field-label {
-    font-family: var(--mono);
-    font-size: 10px;
-    text-transform: uppercase;
-    letter-spacing: 1px;
-    color: var(--text-dimmer);
-    margin-bottom: 4px;
-  }
-  .copy-field-row {
-    display: flex;
-    gap: 8px;
-    align-items: flex-start;
-  }
-  /* Override global input/textarea: surface-2 bg, sans font, tighter padding */
-  .copy-input, .copy-textarea-el {
-    flex: 1;
-    background: var(--surface-2);
-    border-radius: 8px;
-    font-family: var(--sans);
-    padding: 9px 12px;
-  }
-  .copy-textarea-el {
-    resize: vertical;
-    min-height: 72px;
-    line-height: 1.5;
-  }
-  .copy-btn {
-    background: var(--surface-3);
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    color: var(--text-dim);
-    font-size: 11px;
-    font-family: var(--mono);
-    padding: 7px 10px;
-    cursor: pointer;
-    flex-shrink: 0;
-    white-space: nowrap;
-    transition: all 0.15s;
-    align-self: flex-start;
-  }
-  .copy-btn:hover { background: var(--surface-2); color: var(--text); border-color: var(--border-hover); }
-  .copy-btn.copied { color: var(--green); border-color: var(--green-border); }
-  .copy-empty {
-    font-size: 12px;
-    color: var(--text-dimmer);
-    text-align: center;
-    padding: 8px 0 2px;
-  }
-
-  /* ── Transcript Panel ── */
-  .transcript-panel {
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    margin-top: 12px;
-    max-height: 400px;
-    overflow-y: auto;
-  }
-  .transcript-header {
-    padding: 10px 16px;
-    border-bottom: 1px solid var(--border);
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-  }
-  .transcript-header-title {
-    font-family: var(--mono);
-    font-size: 10px;
-    font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: 1.5px;
-    color: var(--accent);
-  }
-  .transcript-close {
-    background: none;
-    border: none;
-    color: var(--text-dimmer);
-    font-size: 16px;
-    cursor: pointer;
-    padding: 0 4px;
-    line-height: 1;
-  }
-  .transcript-close:hover { color: var(--text); }
-  .transcript-segments { padding: 8px 0; }
-  .transcript-seg {
-    display: flex;
-    gap: 12px;
-    padding: 6px 16px;
-    transition: background 0.1s;
-    cursor: pointer;
-  }
-  .transcript-seg:hover { background: var(--surface-2); }
-  .transcript-seg:active { background: var(--surface-3); }
-  .transcript-time {
-    font-family: var(--mono);
-    font-size: 10px;
-    color: var(--text-dimmer);
-    min-width: 52px;
-    padding-top: 2px;
-    flex-shrink: 0;
-  }
-  .transcript-text {
-    font-size: 13px;
-    line-height: 1.6;
-    color: var(--text);
-  }
-  .transcript-seg.highlighted {
-    background: var(--accent-glow);
-    border-left: 2px solid var(--accent);
-    padding-left: 14px;
-  }
-  .transcript-seg.highlighted .transcript-time { color: var(--accent); }
-
-  /* ── AI Suggestion Card ── */
-  .ai-card {
-    background: var(--surface);
-    border: 1px solid rgba(244, 63, 94, 0.25);
-    border-radius: var(--radius);
-    padding: 14px 16px;
-    margin-top: 12px;
-  }
-  .ai-card-header {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    margin-bottom: 8px;
-  }
-  .ai-card-label {
-    font-family: var(--mono);
-    font-size: 10px;
-    font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: 1.5px;
-    color: var(--accent);
-  }
-  .ai-card-range {
-    font-family: var(--mono);
-    font-size: 11px;
-    color: var(--text-dim);
-  }
-  .ai-card-reasoning {
-    font-size: 13px;
-    line-height: 1.5;
-    color: var(--text-dim);
-    margin-bottom: 8px;
-  }
-  .ai-card-duration {
-    font-family: var(--mono);
-    font-size: 11px;
-    color: var(--text-dimmer);
-  }
-  .ai-banner {
-    padding: 10px 16px;
-    border-radius: var(--radius);
-    font-size: 12px;
-    margin-bottom: 16px;
-    background: var(--surface-2);
-    border: 1px solid var(--border);
-    color: var(--text-dim);
-    display: flex;
-    align-items: center;
-    gap: 8px;
-  }
-
-  /* ── Trim Editor ── */
-  .trim-editor {
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    margin-top: 12px;
-    overflow: hidden;
-  }
-  .trim-video-wrap {
-    background: #000;
-    position: relative;
-  }
-  .trim-video-wrap video {
-    width: 100%;
-    display: block;
-    max-height: 340px;
-    object-fit: contain;
-  }
-  .trim-video-overlay {
-    position: absolute;
-    bottom: 8px;
-    left: 12px;
-    right: 12px;
-    display: flex;
-    align-items: center;
-    gap: 8px;
-  }
-  .trim-play-btn {
-    width: 32px; height: 32px;
-    background: rgba(0,0,0,0.6);
-    border: 1px solid rgba(255,255,255,0.2);
-    border-radius: 50%;
-    color: #fff;
-    font-size: 12px;
-    cursor: pointer;
-    display: grid; place-items: center;
-    padding: 0;
-    flex-shrink: 0;
-  }
-  .trim-play-btn:hover { background: rgba(0,0,0,0.8); }
-  .trim-timecode {
-    font-family: var(--mono);
-    font-size: 11px;
-    color: rgba(255,255,255,0.7);
-    background: rgba(0,0,0,0.5);
-    padding: 2px 8px;
-    border-radius: 4px;
-  }
-  .trim-waveform-wrap {
-    padding: 12px 16px;
-    position: relative;
-    cursor: crosshair;
-  }
-  .trim-waveform-wrap canvas {
-    width: 100%;
-    height: 80px;
-    display: block;
-  }
-  .trim-controls {
-    padding: 10px 16px;
-    border-top: 1px solid var(--border);
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    flex-wrap: wrap;
-  }
-  .trim-time-input {
-    background: var(--surface-2);
-    border: 1px solid var(--border);
-    border-radius: 6px;
-    color: var(--text);
-    font-family: var(--mono);
-    font-size: 11px;
-    padding: 5px 8px;
-    width: 70px;
-    text-align: center;
-    outline: none;
-  }
-  .trim-time-input:focus { border-color: var(--accent); }
-  .trim-label {
-    font-family: var(--mono);
-    font-size: 9px;
-    text-transform: uppercase;
-    letter-spacing: 1px;
-    color: var(--text-dimmer);
-  }
-  .trim-duration {
-    font-family: var(--mono);
-    font-size: 12px;
-    color: var(--text-dim);
-    margin-left: auto;
-  }
-  .trim-duration.warn { color: var(--yellow); }
-  .trim-actions {
-    padding: 10px 16px;
-    border-top: 1px solid var(--border);
-    display: flex;
-    gap: 8px;
-    justify-content: flex-end;
-  }
-  .trim-kbd-hint {
-    padding: 6px 16px;
-    border-top: 1px solid var(--border);
-    font-family: var(--mono);
-    font-size: 10px;
-    color: var(--text-dimmer);
-    line-height: 1.6;
-  }
-  .trim-kbd-hint kbd {
-    background: var(--surface-3);
-    border: 1px solid var(--border);
-    border-radius: 3px;
-    padding: 1px 5px;
-    font-family: var(--mono);
-    font-size: 9px;
-    color: var(--text-dim);
-  }
-
   /* ── History ── */
   .session-list { display: flex; flex-direction: column; gap: 8px; }
 
@@ -1186,70 +880,34 @@
   }
   .snipcut-step-connector.done { background: var(--green-border); }
 
-  .snipcut-cuts-summary {
-    background: var(--surface-2);
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    padding: 10px 12px;
-    margin-top: 10px;
-    font-size: 12px;
-    color: var(--text-dim);
-  }
-  .snipcut-cut-row {
+.snipcut-cut-row {
     display: flex;
     gap: 10px;
     padding: 6px 0;
     border-bottom: 1px solid var(--border);
     font-size: 11px;
   }
-  .snipcut-cut-row:last-child { border-bottom: none; }
-  .snipcut-cut-time { font-family: var(--mono); color: var(--text-dim); min-width: 80px; }
-  .snipcut-cut-reason {
-    font-family: var(--mono); font-size: 9px;
-    text-transform: uppercase; letter-spacing: 0.5px;
-    padding: 1px 6px; border-radius: 3px;
-    background: var(--surface-3); color: var(--text-dimmer);
-    min-width: 60px; text-align: center;
-  }
-  .snipcut-cut-reason.filler { background: rgba(234,179,8,0.18); color: #eab308; }
-  .snipcut-cut-reason.repeated_take { background: rgba(239,68,68,0.18); color: #ef4444; }
-  .snipcut-cut-reason.silence { background: rgba(59,130,246,0.18); color: #3b82f6; }
-  .snipcut-cut-reason.merged { background: rgba(168,85,247,0.18); color: #a855f7; }
-  .snipcut-cut-content { flex: 1; color: var(--text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.snipcut-cut-time { font-family: var(--mono); color: var(--text-dim); min-width: 80px; }
+.snipcut-cut-reason.filler { background: rgba(234,179,8,0.18); color: #eab308; }
+.snipcut-cut-reason.silence { background: rgba(59,130,246,0.18); color: #3b82f6; }
+.snipcut-cut-content { flex: 1; color: var(--text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
-  /* ── SnipCut metadata section ── */
-  .snipcut-metadata {
+.snipcut-metadata {
     margin-top: 12px; padding: 10px 12px;
     background: var(--surface-2); border-radius: 6px;
     border: 1px solid var(--border);
   }
-  .snipcut-metadata-row {
-    display: flex; align-items: flex-start; gap: 8px;
-    margin-bottom: 6px; font-size: 12px;
-  }
-  .snipcut-metadata-row:last-child { margin-bottom: 0; }
-  .snipcut-metadata-label {
-    font-family: var(--mono); font-size: 9px;
-    text-transform: uppercase; letter-spacing: 0.4px;
-    color: var(--text-dimmer); min-width: 38px; padding-top: 2px;
-    flex-shrink: 0;
-  }
-  .snipcut-metadata-value {
+.snipcut-metadata-row:last-child { margin-bottom: 0; }
+.snipcut-metadata-value {
     flex: 1; color: var(--text); line-height: 1.4;
     word-break: break-word;
   }
-  .snipcut-metadata-value.tags { display: flex; flex-wrap: wrap; gap: 4px; }
-  .snipcut-metadata-value.tags span {
+.snipcut-metadata-value.tags span {
     font-family: var(--mono); font-size: 10px;
     background: var(--surface-3); color: var(--text-dim);
     padding: 2px 7px; border-radius: 3px;
   }
-  .snipcut-copy-btn {
-    font-size: 10px; padding: 2px 6px; border-radius: 3px;
-    background: transparent; border: 1px solid var(--border);
-    color: var(--text-dimmer); cursor: pointer; flex-shrink: 0;
-  }
-  .snipcut-copy-btn:hover { color: var(--text); border-color: var(--text-dim); }
+.snipcut-copy-btn:hover { color: var(--text); border-color: var(--text-dim); }
 
   /* ── Step Bar ── */
   .step-bar {
@@ -1514,15 +1172,14 @@
 <script>
 const $ = id => document.getElementById(id);
 
-const ACTIVE_STATUSES = ['queued', 'downloading', 'transcribing', 'analyzing', 'exporting'];
-const TRANSCRIPT_STATUSES = ['transcribed', 'ready', 'exported'];
+const ACTIVE_STATUSES = ['queued', 'downloading', 'exporting'];
+const CLIP_READY_STATUSES = ['ready', 'exported'];
 let hasApiKey = false;
 const EMPTY_CLIPS = `<div class="empty"><div class="empty-icon">&#9986;</div><div class="empty-title">No active session</div><div class="empty-sub">Create a new session to get started</div></div>`;
 const EMPTY_HISTORY = `<div class="empty"><div class="empty-icon">&#128197;</div><div class="empty-title">No sessions yet</div><div class="empty-sub">Your past sessions will appear here</div></div>`;
 
 let currentSessionId = null;
 let selectedClipId = null;
-let transcriptCache = {};
 let clipDataCache = {};
 let pollTimer = null;
 let currentSuggestions = [];
@@ -1949,15 +1606,10 @@ function renderClips(session) {
   html += `<div class="progress-text">${done}/${total} clips ${allDone ? 'ready' : 'processing'} &middot; ${esc(shortUrl(session.youtube_url))}</div>`;
   html += `</div>`;
 
-  // Clip cards
   html += `<div class="clip-cards">`;
   clips.forEach(c => {
-    const hasTranscript = TRANSCRIPT_STATUSES.includes(c.status);
-    const isSelected = selectedClipId === c.id;
-    const cardClass = `clip-card${hasTranscript ? ' clickable' : ''}${isSelected ? ' selected' : ''}`;
-    const onclick = hasTranscript ? `onclick="toggleTranscript('${c.id}')"` : '';
-    const statusLabel = c.status === 'downloaded' ? 'done' : c.status;
-    html += `<div class="${cardClass}" ${onclick}>
+    const statusLabel = c.status === 'ready' ? 'ready' : c.status;
+    html += `<div class="clip-card">
       <div class="clip-status ${c.status}"></div>
       <div class="clip-info">
         <div class="clip-note">${esc(c.note || 'Untitled clip')}</div>
@@ -1966,19 +1618,13 @@ function renderClips(session) {
       </div>
       <div class="clip-actions">
         <div class="clip-badge ${c.status}">${esc(statusLabel)}</div>
+        ${c.status === 'ready' ? `<button class="btn-ghost btn-sm" onclick="event.stopPropagation(); exportClip('${c.id}')" style="padding:3px 10px;font-size:10px;">Export</button>` : ''}
         ${c.status === 'error' ? `<button class="btn-ghost btn-sm" onclick="event.stopPropagation(); retryClip('${c.id}')" style="padding:3px 10px;font-size:10px;">Retry</button>` : ''}
       </div>
     </div>`;
   });
   html += `</div>`;
 
-  // AI suggestion + trim editor + copy panel + transcript panel placeholders
-  html += `<div id="aiSuggestionCard"></div>`;
-  html += `<div id="trimEditor"></div>`;
-  html += `<div id="copyPanel"></div>`;
-  html += `<div id="transcriptPanel"></div>`;
-
-  // Open folder button when all done
   if (allDone) {
     const readyCount = clips.filter(c => c.status === 'ready').length;
     const exportedCount = clips.filter(c => c.status === 'exported').length;
@@ -1993,107 +1639,6 @@ function renderClips(session) {
 
   $('clipsContent').innerHTML = html;
   updateStepBar(session);
-
-  // Re-render AI card + trim editor + copy panel + transcript if a clip is selected
-  if (selectedClipId) {
-    const selClip = clips.find(c => c.id === selectedClipId);
-    if (selClip && TRANSCRIPT_STATUSES.includes(selClip.status)) {
-      renderAiCard(selClip);
-      if (selClip.raw_file) renderTrimEditor(selClip);
-      renderCopyPanel(selClip);
-      loadTranscript(selectedClipId, selClip.note, selClip.ai_suggestion_start, selClip.ai_suggestion_end);
-    }
-  }
-}
-
-function renderAiCard(clip) {
-  const card = $('aiSuggestionCard');
-  if (!card) return;
-  if (clip.ai_suggestion_start == null || clip.ai_suggestion_end == null) {
-    card.innerHTML = '';
-    return;
-  }
-  const dur = Math.round(clip.ai_suggestion_end - clip.ai_suggestion_start);
-  card.innerHTML = `<div class="ai-card">
-    <div class="ai-card-header">
-      <div class="ai-card-label">AI Suggestion</div>
-      <div class="ai-card-range">${fmtTime(clip.ai_suggestion_start)} &rarr; ${fmtTime(clip.ai_suggestion_end)}</div>
-    </div>
-    ${clip.ai_reasoning ? `<div class="ai-card-reasoning">${esc(clip.ai_reasoning)}</div>` : ''}
-    <div class="ai-card-duration">${dur}s &middot; <a href="#" onclick="reAnalyze('${clip.id}'); return false;" style="color:var(--accent);text-decoration:none;">Re-analyze</a></div>
-  </div>`;
-}
-
-async function reAnalyze(clipId) {
-  await api('POST', `/api/clips/${clipId}/analyze`);
-  // Clear cache so transcript reloads with new highlight
-  delete transcriptCache[clipId];
-  if (currentSessionId) loadSession(currentSessionId);
-}
-
-function renderCopyPanel(clip) {
-  const panel = $('copyPanel');
-  if (!panel) return;
-
-  const title = (clip && clip.generated_title) || '';
-  const desc = (clip && clip.generated_description) || '';
-  const clipId = clip ? clip.id : '';
-
-  // Skip rebuild if nothing changed (called every 2s from poll)
-  if (copyPanelState && copyPanelState.clipId === clipId &&
-      copyPanelState.title === title && copyPanelState.desc === desc) return;
-  copyPanelState = { clipId, title, desc };
-
-  const hasContent = title || desc;
-
-  panel.innerHTML = `<div class="copy-panel">
-    <div class="copy-panel-header">
-      <div class="copy-panel-label">Title &amp; Description</div>
-      <button class="btn-ghost btn-sm" id="generateCopyBtn" onclick="generateCopy('${clipId}')" ${!hasApiKey ? 'disabled title="Add Claude API key in Settings"' : ''}>&#10024; Generate</button>
-    </div>
-    ${hasContent ? `
-    <div class="copy-field">
-      <div class="copy-field-label">Title</div>
-      <div class="copy-field-row">
-        <input type="text" class="copy-input" id="copyTitle" value="${esc(title)}"
-          oninput="saveCopyEdits('${clipId}')">
-        <button class="copy-btn" id="copyTitleBtn" onclick="copyToClipboard('copyTitleBtn', $('copyTitle').value)">Copy</button>
-      </div>
-    </div>
-    <div class="copy-field">
-      <div class="copy-field-label">Description</div>
-      <div class="copy-field-row">
-        <textarea class="copy-textarea-el" id="copyDesc" rows="3"
-          oninput="saveCopyEdits('${clipId}')">${esc(desc)}</textarea>
-        <button class="copy-btn" id="copyDescBtn" onclick="copyToClipboard('copyDescBtn', $('copyDesc').value)">Copy</button>
-      </div>
-    </div>
-    ` : `<div class="copy-empty">${hasApiKey ? 'Click Generate to create a title and description with Claude.' : 'Add a Claude API key in Settings to enable copy generation.'}</div>`}
-  </div>`;
-}
-
-async function generateCopy(clipId) {
-  if (!clipId) return;
-  const initBtn = $('generateCopyBtn');
-  if (initBtn) { initBtn.disabled = true; initBtn.textContent = '...'; }
-
-  try {
-    const d = await api('POST', `/api/clips/${clipId}/generate-copy`);
-    if (d.error) { toast(d.error); return; }
-
-    if (clipDataCache[clipId]) {
-      clipDataCache[clipId].generated_title = d.title;
-      clipDataCache[clipId].generated_description = d.description;
-    }
-    copyPanelState = null; // force re-render with new content
-    renderCopyPanel(clipDataCache[clipId] || { id: clipId, generated_title: d.title, generated_description: d.description });
-  } catch(e) {
-    toast('Failed to generate copy');
-  } finally {
-    // Re-query: renderCopyPanel may have replaced the DOM node
-    const freshBtn = $('generateCopyBtn');
-    if (freshBtn) { freshBtn.disabled = false; freshBtn.innerHTML = '&#10024; Generate'; }
-  }
 }
 
 function copyToClipboard(btnId, text) {
@@ -2122,261 +1667,20 @@ function saveCopyEdits(clipId) {
   }, 600);
 }
 
-function seekTo(seconds) {
-  const video = $('trimVideo');
-  if (video) {
-    video.currentTime = seconds;
-    video.pause();
-    if ($('trimPlayBtn')) $('trimPlayBtn').innerHTML = '&#9654;';
-  }
-}
-
 function fmtTime(sec) {
   const m = Math.floor(sec / 60);
   const s = Math.floor(sec % 60);
   return `${m}:${s.toString().padStart(2, '0')}`;
 }
 
-function toggleTranscript(clipId) {
-  document.querySelectorAll('.clip-card.selected').forEach(el => el.classList.remove('selected'));
-  if (selectedClipId === clipId) {
-    selectedClipId = null;
-    ['transcriptPanel', 'aiSuggestionCard', 'trimEditor', 'copyPanel'].forEach(id => {
-      const el = $(id); if (el) el.innerHTML = '';
-    });
-    trimState = null;
-    copyPanelState = null;
-    return;
-  }
-  selectedClipId = clipId;
-  event.currentTarget.classList.add('selected');
-  const clip = clipDataCache[clipId] || {};
-  renderAiCard(clip);
-  if (clip.raw_file) renderTrimEditor(clip);
-  renderCopyPanel(clip);
-  loadTranscript(clipId, clip.note || 'Clip', clip.ai_suggestion_start, clip.ai_suggestion_end);
-}
-
-function renderTranscriptHtml(data, clipId, clipNote, aiStart, aiEnd) {
-  const hasAi = aiStart != null && aiEnd != null;
-  let html = `<div class="transcript-panel">`;
-  html += `<div class="transcript-header">`;
-  html += `<div class="transcript-header-title">Transcript &middot; ${esc(clipNote || 'Clip')}</div>`;
-  html += `<button class="transcript-close" onclick="toggleTranscript('${clipId}')">&times;</button>`;
-  html += `</div>`;
-  html += `<div class="transcript-segments">`;
-  (data.segments || []).forEach(seg => {
-    const inRange = hasAi && seg.end > aiStart && seg.start < aiEnd;
-    html += `<div class="transcript-seg${inRange ? ' highlighted' : ''}" onclick="seekTo(${seg.start})">`;
-    html += `<div class="transcript-time">${fmtTime(seg.start)}</div>`;
-    html += `<div class="transcript-text">${esc(seg.text)}</div>`;
-    html += `</div>`;
-  });
-  html += `</div></div>`;
-  return html;
-}
-
-async function loadTranscript(clipId, clipNote, aiStart, aiEnd) {
-  const panel = $('transcriptPanel');
-  if (!panel) return;
-
-  // Use cache if available
-  if (transcriptCache[clipId]) {
-    panel.innerHTML = renderTranscriptHtml(transcriptCache[clipId], clipId, clipNote, aiStart, aiEnd);
-    return;
-  }
-
-  panel.innerHTML = `<div class="transcript-panel"><div style="padding:16px;color:var(--text-dim);font-size:12px;">Loading transcript...</div></div>`;
-
-  try {
-    const data = await api('GET', `/api/clips/${clipId}/transcript`);
-    if (data.error) {
-      panel.innerHTML = `<div class="transcript-panel"><div style="padding:16px;color:var(--text-dimmer);font-size:12px;">${esc(data.error)}</div></div>`;
-      return;
-    }
-    transcriptCache[clipId] = data;
-    panel.innerHTML = renderTranscriptHtml(data, clipId, clipNote, aiStart, aiEnd);
-  } catch(e) {
-    panel.innerHTML = `<div class="transcript-panel"><div style="padding:16px;color:var(--red);font-size:12px;">Failed to load transcript</div></div>`;
-  }
-}
-
-// ── Trim Editor ──
-let trimState = null; // {clipId, start, end, duration, lastHandle, videoEl, canvasEl}
-let copyPanelState = null; // {clipId, title, desc} — skip rebuild when nothing changed
-
-function renderTrimEditor(clip) {
-  const container = $('trimEditor');
-  if (!container) return;
-  // Don't re-render if already showing this clip (preserves video state + user edits)
-  if (trimState && trimState.clipId === clip.id) return;
-
-  // Initial trim values: saved trim > full clip (AI suggestion shown as overlay, not pre-applied)
-  const trimStart = clip.final_start ?? 0;
-  const trimEnd = clip.final_end ?? (clip.window_seconds || 300);
-
-  container.innerHTML = `<div class="trim-editor">
-    <div class="trim-video-wrap">
-      <video id="trimVideo" preload="metadata" src="/api/clips/${clip.id}/video"></video>
-      <div class="trim-video-overlay">
-        <button class="trim-play-btn" id="trimPlayBtn" onclick="trimTogglePlay()">&#9654;</button>
-        <div class="trim-timecode" id="trimTimecode">0:00 / 0:00</div>
-      </div>
-    </div>
-    <div class="trim-waveform-wrap" id="trimWaveWrap">
-      <canvas id="trimWaveCanvas" height="80"></canvas>
-    </div>
-    <div class="trim-controls">
-      <div><div class="trim-label">In</div><input class="trim-time-input" id="trimInInput" value="${fmtTime(trimStart)}" onchange="trimInputChanged('start')"></div>
-      <div><div class="trim-label">Out</div><input class="trim-time-input" id="trimOutInput" value="${fmtTime(trimEnd)}" onchange="trimInputChanged('end')"></div>
-      <div class="trim-duration" id="trimDuration">${Math.round(trimEnd - trimStart)}s</div>
-    </div>
-    <div class="trim-controls" style="border-top:1px solid var(--border);">
-      <label style="margin-bottom:0;display:flex;align-items:center;gap:4px;cursor:pointer;">
-        <input type="checkbox" id="exportCaptions" checked style="accent-color:var(--accent);"> Captions
-      </label>
-      <label style="margin-bottom:0;display:flex;align-items:center;gap:4px;cursor:pointer;">
-        <input type="checkbox" id="exportVertical" checked style="accent-color:var(--accent);"> Vertical 9:16
-      </label>
-    </div>
-    <div class="trim-actions">
-      ${clip.ai_suggestion_start != null ? `<button class="btn-ghost btn-sm" onclick="trimUseAi()">Use AI suggestion</button>` : ''}
-      <button class="btn-ghost btn-sm" onclick="trimSave()">Save trim</button>
-      <button class="btn-primary btn-sm" onclick="exportClip('${clip.id}')">&#9986; Export Short</button>
-    </div>
-    <div class="trim-kbd-hint">
-      <kbd>Space</kbd> play/pause &nbsp; <kbd>I</kbd>/<kbd>O</kbd> set in/out &nbsp; <kbd>&#8592;</kbd>/<kbd>&#8594;</kbd> nudge 1s &nbsp; <kbd>Shift</kbd>+arrows 5s &nbsp; <kbd>J</kbd>/<kbd>K</kbd>/<kbd>L</kbd> rwd/pause/fwd
-    </div>
-  </div>`;
-
-  trimState = {
-    clipId: clip.id,
-    start: trimStart,
-    end: trimEnd,
-    duration: 0,
-    lastHandle: 'end',
-    aiStart: clip.ai_suggestion_start,
-    aiEnd: clip.ai_suggestion_end,
-  };
-
-  const video = $('trimVideo');
-  video.addEventListener('loadedmetadata', () => {
-    trimState.duration = video.duration;
-    video.currentTime = trimState.start;
-    loadWaveform(clip.id);
-  });
-  video.addEventListener('timeupdate', () => {
-    const t = video.currentTime;
-    $('trimTimecode').textContent = fmtTime(t) + ' / ' + fmtTime(trimState.duration);
-    // Constrain to trim range during playback
-    if (!video.paused && t >= trimState.end) {
-      video.pause();
-      video.currentTime = trimState.end;
-      $('trimPlayBtn').innerHTML = '&#9654;';
-    }
-    updateWaveformPlayhead();
-  });
-}
-
-function trimClampStart(val) {
-  if (!trimState) return val;
-  return Math.max(0, Math.min(val, trimState.end - 1));
-}
-function trimClampEnd(val) {
-  if (!trimState) return val;
-  return Math.max(trimState.start + 1, Math.min(val, trimState.duration || Infinity));
-}
-
-function trimTogglePlay() {
-  const video = $('trimVideo');
-  if (!video || !trimState) return;
-  if (video.paused) {
-    if (video.currentTime < trimState.start || video.currentTime >= trimState.end) {
-      video.currentTime = trimState.start;
-    }
-    video.play();
-    $('trimPlayBtn').innerHTML = '&#9646;&#9646;';
-  } else {
-    video.pause();
-    $('trimPlayBtn').innerHTML = '&#9654;';
-  }
-}
-
-function trimUpdateUI() {
-  if (!trimState) return;
-  $('trimInInput').value = fmtTime(trimState.start);
-  $('trimOutInput').value = fmtTime(trimState.end);
-  const dur = Math.round(trimState.end - trimState.start);
-  const durEl = $('trimDuration');
-  durEl.textContent = dur + 's';
-  durEl.className = 'trim-duration' + (dur > 60 ? ' warn' : '');
-  drawWaveform();
-}
-
-function trimInputChanged(which) {
-  if (!trimState) return;
-  const input = which === 'start' ? $('trimInInput') : $('trimOutInput');
-  const parts = input.value.split(':');
-  if (parts.length !== 2) return;
-  const secs = parseInt(parts[0]) * 60 + parseFloat(parts[1]);
-  if (isNaN(secs)) return;
-  if (which === 'start') {
-    trimState.start = trimClampStart(secs);
-    trimState.lastHandle = 'start';
-  } else {
-    trimState.end = trimClampEnd(secs);
-    trimState.lastHandle = 'end';
-  }
-  const video = $('trimVideo');
-  if (video) video.currentTime = which === 'start' ? trimState.start : trimState.end;
-  trimUpdateUI();
-}
-
-function trimNudge(delta) {
-  if (!trimState) return;
-  const h = trimState.lastHandle;
-  if (h === 'start') {
-    trimState.start = trimClampStart(trimState.start + delta);
-  } else {
-    trimState.end = trimClampEnd(trimState.end + delta);
-  }
-  const video = $('trimVideo');
-  if (video) video.currentTime = h === 'start' ? trimState.start : trimState.end;
-  trimUpdateUI();
-}
-
-function trimUseAi() {
-  if (!trimState || trimState.aiStart == null) return;
-  trimState.start = trimState.aiStart;
-  trimState.end = trimState.aiEnd;
-  const video = $('trimVideo');
-  if (video) video.currentTime = trimState.start;
-  trimUpdateUI();
-}
-
-async function trimSave() {
-  if (!trimState) return;
-  await api('PUT', `/api/clips/${trimState.clipId}/trim`, {start: trimState.start, end: trimState.end});
-  toast('Trim saved');
-}
-
-function getExportOptions() {
-  return {
-    captions: $('exportCaptions') ? $('exportCaptions').checked : true,
-    vertical: $('exportVertical') ? $('exportVertical').checked : true,
-  };
-}
-
 async function exportClip(clipId) {
-  if (trimState && trimState.clipId === clipId) await trimSave();
-  await api('POST', `/api/clips/${clipId}/export`, getExportOptions());
-  trimState = null;
+  await api('POST', `/api/clips/${clipId}/export`);
   toast('Export started');
   if (currentSessionId) { startPolling(currentSessionId); loadSession(currentSessionId); }
 }
 
 async function exportAll(sessionId) {
-  await api('POST', `/api/sessions/${sessionId}/export-all`, getExportOptions());
+  await api('POST', `/api/sessions/${sessionId}/export-all`);
   toast('Batch export started');
   if (currentSessionId) { startPolling(currentSessionId); loadSession(currentSessionId); }
 }
@@ -2391,174 +1695,11 @@ async function retryClip(clipId) {
   if (currentSessionId) { startPolling(currentSessionId); loadSession(currentSessionId); }
 }
 
-// ── Waveform ──
-let waveformData = null;
-let waveformBaseImage = null; // cached ImageData of base waveform (without playhead)
-let waveformDims = null; // {w, h, dpr} — cached canvas dimensions
-
-async function loadWaveform(clipId) {
-  try {
-    waveformData = await api('GET', `/api/clips/${clipId}/waveform`);
-    waveformBaseImage = null;
-    drawWaveform();
-  } catch(e) { waveformData = null; }
-}
-
-function initWaveformCanvas() {
-  const canvas = $('trimWaveCanvas');
-  if (!canvas) return null;
-  const dpr = window.devicePixelRatio || 1;
-  const rect = canvas.getBoundingClientRect();
-  const w = rect.width;
-  const h = rect.height;
-  if (!waveformDims || waveformDims.w !== w || waveformDims.h !== h) {
-    canvas.width = w * dpr;
-    canvas.height = h * dpr;
-    waveformDims = {w, h, dpr};
-    waveformBaseImage = null;
-  }
-  return {canvas, ctx: canvas.getContext('2d'), w, h, dpr};
-}
-
-function drawWaveform() {
-  const info = initWaveformCanvas();
-  if (!info || !waveformData || !trimState) return;
-  const {canvas, ctx, w, h, dpr} = info;
-  const peaks = waveformData.peaks || [];
-  const dur = trimState.duration || waveformData.duration || 1;
-
-  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  ctx.clearRect(0, 0, w, h);
-
-  // AI suggestion background
-  if (trimState.aiStart != null && trimState.aiEnd != null) {
-    const ax1 = (trimState.aiStart / dur) * w;
-    const ax2 = (trimState.aiEnd / dur) * w;
-    ctx.fillStyle = 'rgba(244, 63, 94, 0.06)';
-    ctx.fillRect(ax1, 0, ax2 - ax1, h);
-  }
-
-  // Trim selection overlay
-  const sx = (trimState.start / dur) * w;
-  const ex = (trimState.end / dur) * w;
-  ctx.fillStyle = 'rgba(244, 63, 94, 0.12)';
-  ctx.fillRect(sx, 0, ex - sx, h);
-
-  // Waveform bars
-  const barW = Math.max(1, w / peaks.length - 0.5);
-  peaks.forEach((p, i) => {
-    const x = (i / peaks.length) * w;
-    const barH = p * h * 0.85;
-    const inSel = x >= sx && x <= ex;
-    ctx.fillStyle = inSel ? 'rgba(244, 63, 94, 0.6)' : 'rgba(255, 255, 255, 0.15)';
-    ctx.fillRect(x, (h - barH) / 2, barW, barH);
-  });
-
-  // Trim handles
-  [sx, ex].forEach(hx => {
-    ctx.fillStyle = '#f43f5e';
-    ctx.fillRect(hx - 1.5, 0, 3, h);
-    ctx.beginPath();
-    ctx.roundRect(hx - 5, h/2 - 10, 10, 20, 3);
-    ctx.fill();
-    ctx.fillStyle = '#fff';
-    ctx.fillRect(hx - 2, h/2 - 4, 1, 8);
-    ctx.fillRect(hx + 1, h/2 - 4, 1, 8);
-  });
-
-  // Cache base image for playhead overlay
-  waveformBaseImage = ctx.getImageData(0, 0, canvas.width, canvas.height);
-}
-
-function updateWaveformPlayhead() {
-  const canvas = $('trimWaveCanvas');
-  const video = $('trimVideo');
-  if (!canvas || !video || !trimState || !waveformBaseImage) return;
-  const ctx = canvas.getContext('2d');
-  // Restore cached base image instead of full redraw
-  ctx.putImageData(waveformBaseImage, 0, 0);
-  const {w, h, dpr} = waveformDims || {};
-  if (!w) return;
-  const dur = trimState.duration || 1;
-  const px = (video.currentTime / dur) * w;
-  ctx.save();
-  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  ctx.fillStyle = '#fff';
-  ctx.fillRect(px - 0.5, 0, 1, h);
-  ctx.restore();
-}
-
-// Waveform click-to-seek + drag (throttled for smooth feel)
-(function() {
-  let dragging = null; // 'start', 'end', or 'seek'
-  let dragRaf = null;  // requestAnimationFrame ID for throttling
-
-  document.addEventListener('mousedown', (e) => {
-    const wrap = $('trimWaveWrap');
-    if (!wrap || !trimState || !wrap.contains(e.target)) return;
-    const rect = wrap.querySelector('canvas').getBoundingClientRect();
-    const x = e.clientX - rect.left;
-    const w = rect.width;
-    const dur = trimState.duration || 1;
-    const sx = (trimState.start / dur) * w;
-    const ex = (trimState.end / dur) * w;
-
-    // Check if near a handle (within 12px for easier grabbing)
-    if (Math.abs(x - sx) < 12) { dragging = 'start'; trimState.lastHandle = 'start'; }
-    else if (Math.abs(x - ex) < 12) { dragging = 'end'; trimState.lastHandle = 'end'; }
-    else { dragging = 'seek'; }
-    applyDrag(e);
-  });
-
-  document.addEventListener('mousemove', (e) => {
-    if (!dragging || !trimState) return;
-    // Throttle to animation frame — one update per ~16ms instead of every pixel
-    if (dragRaf) return;
-    dragRaf = requestAnimationFrame(() => {
-      dragRaf = null;
-      applyDrag(e);
-    });
-  });
-
-  document.addEventListener('mouseup', () => {
-    if (dragging && trimState) {
-      // Final precise update + seek video on release
-      const video = $('trimVideo');
-      if (video && dragging !== 'seek') {
-        video.currentTime = dragging === 'start' ? trimState.start : trimState.end;
-      }
-    }
-    dragging = null;
-  });
-
-  function applyDrag(e) {
-    const canvas = $('trimWaveCanvas');
-    if (!canvas || !trimState) return;
-    const rect = canvas.getBoundingClientRect();
-    const w = rect.width;
-    const dur = trimState.duration || 1;
-    const x = Math.max(0, Math.min(e.clientX - rect.left, w));
-    const t = (x / w) * dur;
-
-    if (dragging === 'start') {
-      trimState.start = trimClampStart(t);
-      trimUpdateUI();
-    } else if (dragging === 'end') {
-      trimState.end = trimClampEnd(t);
-      trimUpdateUI();
-    } else if (dragging === 'seek') {
-      const video = $('trimVideo');
-      if (video) video.currentTime = t;
-    }
-  }
-})();
-
-// ── Keyboard Shortcuts ──
+// Global keyboard shortcuts
 document.addEventListener('keydown', (e) => {
   if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
   const mod = e.metaKey || e.ctrlKey;
 
-  // Global shortcuts (work regardless of trim state)
   if (mod && e.key === 'n') {
     e.preventDefault();
     switchView('new');
@@ -2575,58 +1716,9 @@ document.addEventListener('keydown', (e) => {
     if (selectedClipId) exportClip(selectedClipId);
     return;
   }
-  if (e.key === 'Escape') {
-    if (selectedClipId) {
-      selectedClipId = null;
-      ['transcriptPanel', 'aiSuggestionCard', 'trimEditor', 'copyPanel'].forEach(id => {
-        const el = $(id); if (el) el.innerHTML = '';
-      });
-      trimState = null;
-      copyPanelState = null;
-      document.querySelectorAll('.clip-card.selected').forEach(el => el.classList.remove('selected'));
-    }
-    return;
-  }
-
-  // Trim editor shortcuts (only when trim editor is active)
-  if (!trimState) return;
-  const video = $('trimVideo');
-  switch(e.key) {
-    case ' ':
-      e.preventDefault();
-      trimTogglePlay();
-      break;
-    case 'ArrowLeft':
-      e.preventDefault();
-      trimNudge(e.shiftKey ? -5 : -1);
-      break;
-    case 'ArrowRight':
-      e.preventDefault();
-      trimNudge(e.shiftKey ? 5 : 1);
-      break;
-    case 'i': case 'I':
-      if (video && trimState) {
-        trimState.start = trimClampStart(video.currentTime);
-        trimState.lastHandle = 'start';
-        trimUpdateUI();
-      }
-      break;
-    case 'o': case 'O':
-      if (video && trimState) {
-        trimState.end = trimClampEnd(video.currentTime);
-        trimState.lastHandle = 'end';
-        trimUpdateUI();
-      }
-      break;
-    case 'j': case 'J':
-      if (video) { video.currentTime = Math.max(0, video.currentTime - 5); }
-      break;
-    case 'k': case 'K':
-      if (video) { video.pause(); $('trimPlayBtn').innerHTML = '&#9654;'; }
-      break;
-    case 'l': case 'L':
-      if (video) { video.currentTime = Math.min(video.currentTime + 5, trimState.duration); }
-      break;
+  if (e.key === 'Escape' && selectedClipId) {
+    selectedClipId = null;
+    document.querySelectorAll('.clip-card.selected').forEach(el => el.classList.remove('selected'));
   }
 });
 
@@ -2866,63 +1958,7 @@ async function loadSnipcutJobs() {
   } catch(e) { /* silent */ }
 }
 
-function snipcutCopyField(jobId, field) {
-  try {
-    const el = document.querySelector(`[data-meta-job="${jobId}"]`);
-    if (!el) return;
-    const meta = JSON.parse(el.dataset.meta);
-    let text = '';
-    if (field === 'title') text = meta.title || '';
-    else if (field === 'desc') text = meta.description || '';
-    else if (field === 'tags') text = (meta.tags || []).join(', ');
-    else if (field === 'all') text = `${meta.title}\n\n${meta.description}\n\nTags: ${(meta.tags||[]).join(', ')}`;
-    navigator.clipboard.writeText(text).then(() => toast('Copied!')).catch(() => toast('Copy failed'));
-  } catch(e) { toast('Copy failed'); }
-}
-
-// Store resolve scripts by job ID for clipboard copy
-const _resolveScripts = {};
-
-function snipcutCopyResolveScript(jobId) {
-  const script = _resolveScripts[jobId];
-  if (!script) { toast('Script not available'); return; }
-  navigator.clipboard.writeText(script)
-    .then(() => toast('Resolve script copied — paste into Workspace → Console'))
-    .catch(() => toast('Copy failed'));
-}
-
-function snipcutRenderMetadata(j) {
-  if (!j.metadata_json) return '';
-  let meta;
-  try { meta = JSON.parse(j.metadata_json); } catch(e) { return ''; }
-  if (!meta || !meta.title) return '';
-  const tags = (meta.tags || []).map(t => `<span>${esc(t)}</span>`).join('');
-  const safeJson = esc(JSON.stringify(meta));
-  return `
-    <div class="snipcut-metadata" data-meta-job="${j.id}" data-meta="${safeJson}">
-      <div class="snipcut-metadata-row">
-        <span class="snipcut-metadata-label">Title</span>
-        <span class="snipcut-metadata-value">${esc(meta.title)}</span>
-        <button class="snipcut-copy-btn" onclick="snipcutCopyField('${j.id}','title')">Copy</button>
-      </div>
-      <div class="snipcut-metadata-row">
-        <span class="snipcut-metadata-label">Desc</span>
-        <span class="snipcut-metadata-value">${esc(meta.description || '')}</span>
-        <button class="snipcut-copy-btn" onclick="snipcutCopyField('${j.id}','desc')">Copy</button>
-      </div>
-      <div class="snipcut-metadata-row">
-        <span class="snipcut-metadata-label">Tags</span>
-        <span class="snipcut-metadata-value tags">${tags}</span>
-        <button class="snipcut-copy-btn" onclick="snipcutCopyField('${j.id}','tags')">Copy</button>
-      </div>
-      <div style="margin-top:6px;text-align:right;">
-        <button class="snipcut-copy-btn" onclick="snipcutCopyField('${j.id}','all')" style="font-weight:500;">Copy All</button>
-      </div>
-    </div>`;
-}
-
 function renderSnipcutJobCard(j) {
-  if (j.resolve_script) _resolveScripts[j.id] = j.resolve_script;
   const durMin = j.duration_seconds ? (j.duration_seconds / 60).toFixed(1) : '—';
   const vfrBadge = j.is_vfr ? '<span class="clip-badge downloading" style="font-size:9px;">VFR → CFR</span>'
                              : '<span class="clip-badge ready" style="font-size:9px;">CFR</span>';
@@ -2931,45 +1967,14 @@ function renderSnipcutJobCard(j) {
   if (j.status === 'error') {
     body = `<div class="clip-error" style="margin-top:6px;">${esc(j.error_text || 'Unknown error').slice(0, 200)}</div>`;
   } else if (j.status === 'done') {
-    const cuts = j.cuts_json ? JSON.parse(j.cuts_json) : [];
-    const totalCutTime = cuts.reduce((sum, c) => sum + (c.end - c.start), 0);
-    let resolveBanner = '';
-
     body = `
-      <div class="snipcut-cuts-summary">
-        <strong style="color:var(--text);">${cuts.length}</strong> cuts detected
-        &middot; <strong style="color:var(--text);">${totalCutTime.toFixed(1)}s</strong> removed
-        &middot; final ~${(j.duration_seconds - totalCutTime).toFixed(0)}s
-        ${j.analysis_reasoning ? `<div style="margin-top:6px;color:var(--text-dimmer);font-size:11px;">${esc(j.analysis_reasoning)}</div>` : ''}
-      </div>
       <div style="display:flex;gap:8px;margin-top:10px;align-items:center;flex-wrap:wrap;">
-        <button class="btn-primary btn-sm" onclick="snipcutSendToResolve('${j.id}')" title="Copy setup script + open Resolve">&#127916; Send to Resolve</button>
-        ${j.cfr_output_path ? `<button class="btn-ghost btn-sm" onclick="snipcutRevealFile('${(j.cfr_output_path).replace(/'/g, "\\'")}')" style="font-family:var(--mono);font-size:10px;" title="Reveal CFR file in Finder">CFR</button>` : ''}
-        ${j.transcript_path ? `<button class="btn-ghost btn-sm" onclick="snipcutRevealFile('${(j.transcript_path).replace(/'/g, "\\'")}')" style="font-family:var(--mono);font-size:10px;" title="Reveal transcript in Finder">TXT</button>` : ''}
-        ${j.srt_path ? `<button class="btn-ghost btn-sm" onclick="snipcutRevealFile('${(j.srt_path).replace(/'/g, "\\'")}')" style="font-family:var(--mono);font-size:10px;background:rgba(59,130,246,0.18);color:#3b82f6;" title="SRT subtitle markers — drag onto Resolve timeline">SRT</button>` : ''}
-      </div>
-      ${resolveBanner}
-      ${snipcutRenderMetadata(j)}
-      ${cuts.length > 0 ? '<div style="margin-top:8px;max-height:200px;overflow-y:auto;">' +
-        cuts.slice(0, 50).map(c => `
-          <div class="snipcut-cut-row">
-            <span class="snipcut-cut-time">${fmtTime(c.start)}—${fmtTime(c.end)}</span>
-            <span class="snipcut-cut-reason ${c.reason || 'filler'}">${esc(c.reason || 'cut')}</span>
-            <span class="snipcut-cut-content">${esc((c.content || '').slice(0, 80))}</span>
-          </div>`).join('') + '</div>' : ''}
-    `;
+        ${j.cfr_output_path ? `<button class="btn-primary btn-sm" onclick="snipcutRevealFile('${(j.cfr_output_path).replace(/'/g, "\\'")}')" title="Reveal CFR file in Finder">&#128193; Reveal CFR</button>` : ''}
+      </div>`;
   } else {
-    // In-progress: show stage stepper + parallel progress bars
     const cfrPct = j.cfr_progress || 0;
-    const txPct = j.transcribe_progress || 0;
-    const stageOrder = ['probing', 'processing', 'analyzing', 'generating_outputs', 'done'];
-    const stageLabels = {
-      probing: 'Probe',
-      processing: 'Convert + Transcribe',
-      analyzing: 'Analyze',
-      generating_outputs: 'Generate Outputs',
-      done: 'Done',
-    };
+    const stageOrder = ['probing', 'processing', 'done'];
+    const stageLabels = { probing: 'Probe', processing: 'Convert to CFR', done: 'Done' };
     const currentIdx = stageOrder.indexOf(j.status);
 
     let stepper = '<div class="snipcut-stepper">';
@@ -2990,16 +1995,7 @@ function renderSnipcutJobCard(j) {
           <div class="snipcut-progress-label">CFR</div>
           <div class="snipcut-progress-bar"><div class="snipcut-progress-fill" style="width:${cfrPct}%"></div></div>
           <div class="snipcut-progress-pct">${cfrPct.toFixed(0)}%</div>
-        </div>
-        <div class="snipcut-progress-row">
-          <div class="snipcut-progress-label">Transcribe</div>
-          <div class="snipcut-progress-bar"><div class="snipcut-progress-fill" style="width:${txPct}%"></div></div>
-          <div class="snipcut-progress-pct">${txPct.toFixed(0)}%</div>
         </div>`;
-    } else if (j.status === 'analyzing') {
-      body += '<div style="font-size:11px;color:var(--accent);margin-top:10px;">&#129302; Analyzing with Claude Sonnet…</div>';
-    } else if (j.status === 'generating_outputs') {
-      body += '<div style="font-size:11px;color:var(--accent);margin-top:10px;">&#9999;&#65039; Writing SRT + Resolve script…</div>';
     } else if (j.status === 'probing') {
       body += '<div style="font-size:11px;color:var(--text-dim);margin-top:10px;">Probing video metadata…</div>';
     }
@@ -3021,7 +2017,6 @@ function renderSnipcutJobCard(j) {
         ${vfrBadge}
         ${statusBadge}
         ${j.status === 'error' ? `<button class="btn-ghost btn-sm" onclick="snipcutRetry('${j.id}')" style="font-size:10px;padding:3px 10px;">Retry</button>` : ''}
-        ${j.status === 'done' ? `<button class="btn-ghost btn-sm" onclick="snipcutCleanup('${j.id}')" style="font-size:10px;padding:3px 10px;" title="Clear transcript data from DB to save space">Clean DB</button>` : ''}
         <button class="delete-btn" onclick="snipcutDelete('${j.id}')" title="Delete job">&#10005;</button>
       </div>
     </div>
@@ -3046,12 +2041,6 @@ async function snipcutCleanup(jobId) {
 async function snipcutDelete(jobId) {
   await api('DELETE', `/api/snipcut/jobs/${jobId}`);
   loadSnipcutJobs();
-}
-
-async function snipcutSendToResolve(jobId) {
-  const d = await api('POST', `/api/snipcut/jobs/${jobId}/open-resolve`);
-  if (d.error) { toast(d.error); return; }
-  toast('Script copied! In Resolve: Workspace → Console → ⌘V → Enter', 8000);
 }
 
 async function snipcutRevealFile(filePath) {

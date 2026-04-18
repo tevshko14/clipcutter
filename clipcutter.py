@@ -5,7 +5,6 @@ Paste timestamps, get transcribed clips with AI sizzle reel suggestions.
 """
 
 import os
-import re
 import sys
 import json
 import shutil
@@ -24,7 +23,7 @@ for _p in ["/opt/homebrew/bin", "/usr/local/bin"]:
 
 def check_and_install_pip_deps():
     """Auto-install Python dependencies on first run."""
-    required = {"flask": "flask", "webview": "pywebview", "whisper": "openai-whisper", "anthropic": "anthropic", "faster_whisper": "faster-whisper"}
+    required = {"flask": "flask", "webview": "pywebview", "anthropic": "anthropic", "requests": "requests"}
     missing = []
     for import_name, pip_name in required.items():
         try:
@@ -66,7 +65,6 @@ def get_ytdlp_cmd():
 check_and_install_pip_deps()
 
 from flask import Flask, Response, render_template_string, request, jsonify, send_file
-import struct
 import webview
 
 # ClipCutter modules (split out to keep this file navigable)
@@ -76,7 +74,7 @@ from cc_config import (
     load_config, save_config,
 )
 from cc_db import (
-    get_db, init_db, row_to_dict, rows_to_list,
+    get_db, with_db, init_db, row_to_dict, rows_to_list,
     get_session_output_dir, snipcut_update as _snipcut_update,
 )
 from cc_helpers import (
@@ -86,22 +84,6 @@ from cc_helpers import (
 from cc_log import log
 
 app = Flask(__name__)
-
-def extract_trimmed_transcript(transcript_data: dict, trim_start: float, trim_end: float) -> str:
-    """Return transcript text for segments that overlap the trim range."""
-    return " ".join(
-        seg["text"].strip()
-        for seg in transcript_data.get("segments", [])
-        if seg["end"] > trim_start and seg["start"] < trim_end
-    )
-
-def resolve_trim_range(clip: dict) -> tuple:
-    """Return (trim_start, trim_end) — final_start/end > AI suggestion > full window."""
-    fs, ai_s = clip.get("final_start"), clip.get("ai_suggestion_start")
-    fe, ai_e = clip.get("final_end"), clip.get("ai_suggestion_end")
-    start = fs if fs is not None else (ai_s if ai_s is not None else 0)
-    end = fe if fe is not None else (ai_e if ai_e is not None else (clip.get("window_seconds") or 300))
-    return start, end
 
 CLAUDE_HAIKU = "claude-haiku-4-5-20251001"
 CLAUDE_SONNET = "claude-sonnet-4-20250514"
@@ -327,12 +309,11 @@ def download_clip(clip_id: str, url: str):
 
         if result.returncode == 0:
             conn.execute(
-                "UPDATE clips SET status = 'downloaded', raw_file = ? WHERE id = ?",
+                "UPDATE clips SET status = 'ready', raw_file = ? WHERE id = ?",
                 (str(output_path), clip_id)
             )
             conn.commit()
             conn.close()
-            transcribe_clip(clip_id)
         else:
             error_msg = result.stderr[-400:] if result.stderr else "Download failed"
             conn.execute(
@@ -393,12 +374,11 @@ def extract_clip_local(clip_id: str, source_path: str):
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
         if result.returncode == 0 and output_path.exists():
             conn.execute(
-                "UPDATE clips SET status = 'downloaded', raw_file = ? WHERE id = ?",
+                "UPDATE clips SET status = 'ready', raw_file = ? WHERE id = ?",
                 (str(output_path), clip_id)
             )
             conn.commit()
             conn.close()
-            transcribe_clip(clip_id)
         else:
             error_msg = (result.stderr or "ffmpeg extraction failed")[-300:]
             conn.execute(
@@ -469,314 +449,15 @@ def gather_session(session_id: str):
         threading.Thread(target=download_clip, args=(clip_id, url), daemon=True).start()
 
 
-# ---------- Whisper ----------
-
-_whisper_model = None
-_whisper_model_name = None
-_whisper_lock = threading.Lock()
-
-def get_whisper_model():
-    """Lazy-load Whisper model (thread-safe). Reloads if model name changed in settings."""
-    global _whisper_model, _whisper_model_name
-    config = load_config()
-    requested = config.get("whisper_model", "base")
-    if _whisper_model is None or _whisper_model_name != requested:
-        with _whisper_lock:
-            if _whisper_model is None or _whisper_model_name != requested:
-                import whisper
-                models_dir = str(APP_DIR / "whisper_models")
-                log.info("Loading Whisper model: %s", requested)
-                _whisper_model = whisper.load_model(requested, download_root=models_dir)
-                _whisper_model_name = requested
-                log.info("Whisper model ready")
-    return _whisper_model
-
-_whisper_inference_lock = threading.Lock()
-
-def _run_whisper(audio_path: str, model_name: str = None) -> dict:
-    """Run Whisper transcription. Serialized — PyTorch models are not thread-safe."""
-    import whisper
-    models_dir = str(APP_DIR / "whisper_models")
-
-    if model_name is None:
-        model_name = load_config().get("whisper_model", "base")
-
-    model = get_whisper_model()
-    with _whisper_inference_lock:
-        try:
-            return model.transcribe(audio_path, word_timestamps=True, language="en")
-        except RuntimeError as e:
-            if "size of tensor" in str(e) and model_name != "base":
-                log.warning("Whisper %s failed with tensor error, retrying with base", model_name)
-                fallback = whisper.load_model("base", download_root=models_dir)
-                return fallback.transcribe(audio_path, word_timestamps=True, language="en")
-            raise
-
-
-def transcribe_clip(clip_id: str):
-    """Transcribe a downloaded clip using Whisper. Updates DB with results."""
-    should_analyze = False
-    conn = get_db()
-    try:
-        clip = row_to_dict(conn.execute("SELECT id, raw_file FROM clips WHERE id = ?", (clip_id,)).fetchone())
-        if not clip or not clip["raw_file"]:
-            if clip:
-                conn.execute(
-                    "UPDATE clips SET status = 'error', error_text = 'No raw file for transcription' WHERE id = ?",
-                    (clip_id,)
-                )
-                conn.commit()
-            return
-
-        conn.execute("UPDATE clips SET status = 'transcribing' WHERE id = ?", (clip_id,))
-        conn.commit()
-
-        result = _run_whisper(clip["raw_file"])
-
-        transcript_data = {
-            "text": result.get("text", ""),
-            "segments": [],
-        }
-        for seg in result.get("segments", []):
-            if seg is None:
-                continue
-            segment = {
-                "start": seg.get("start", 0),
-                "end": seg.get("end", 0),
-                "text": seg.get("text", ""),
-                "words": [],
-            }
-            for w in seg.get("words", []) or []:
-                if w is None:
-                    continue
-                segment["words"].append({
-                    "word": w.get("word", ""),
-                    "start": w.get("start", 0),
-                    "end": w.get("end", 0),
-                })
-            transcript_data["segments"].append(segment)
-
-        conn.execute(
-            "UPDATE clips SET status = 'transcribed', transcript_json = ? WHERE id = ?",
-            (json.dumps(transcript_data), clip_id)
-        )
-        conn.commit()
-        should_analyze = True
-    except Exception as e:
-        conn.execute(
-            "UPDATE clips SET status = 'error', error_text = ? WHERE id = ?",
-            (f"Transcription failed: {str(e)[:400]}", clip_id)
-        )
-        conn.commit()
-    finally:
-        conn.close()
-
-    if should_analyze:
-        analyze_clip(clip_id)
-
-# ---------- AI Analysis ----------
-
-def analyze_clip(clip_id: str):
-    """Use Claude to identify the best sizzle reel segment from a transcript."""
-    conn = get_db()
-    try:
-        clip = row_to_dict(conn.execute(
-            "SELECT id, transcript_json, start_seconds FROM clips WHERE id = ?", (clip_id,)
-        ).fetchone())
-        config = load_config()
-        api_key = config.get("api_key", "")
-
-        # Skip analysis if no transcript or no API key
-        if not clip or not clip["transcript_json"] or not api_key:
-            if clip:
-                conn.execute("UPDATE clips SET status = 'ready' WHERE id = ?", (clip_id,))
-                conn.commit()
-            return
-
-        conn.execute("UPDATE clips SET status = 'analyzing' WHERE id = ?", (clip_id,))
-        conn.commit()
-
-        transcript_data = json.loads(clip["transcript_json"])
-        target_duration = config.get("target_duration", 60)
-        clip_start = clip["start_seconds"] or 0
-
-        # Format transcript with absolute timestamps for Claude
-        formatted_lines = []
-        for seg in transcript_data.get("segments", []):
-            abs_start = clip_start + seg["start"]
-            mins = int(abs_start // 60)
-            secs = int(abs_start % 60)
-            formatted_lines.append(f"[{mins}:{secs:02d}] {seg['text'].strip()}")
-        formatted_transcript = "\n".join(formatted_lines)
-
-        prompt = f"""You are a YouTube Shorts editor for a finance content creator.
-
-Given this transcript from a livestream segment, identify the single best continuous segment (~{target_duration - 15}-{target_duration + 15} seconds) that would work as a standalone YouTube Short.
-
-The ideal segment:
-- Has a clear, complete thought or thesis
-- Includes specific data points, numbers, or analysis
-- Starts and ends at natural sentence boundaries
-- Would make a viewer want to watch more
-- Works without additional context
-
-TRANSCRIPT (with timestamps relative to the full stream):
-{formatted_transcript}
-
-Respond in JSON only, no other text:
-{{"start_seconds": <float, seconds from start of this clip>, "end_seconds": <float, seconds from start of this clip>, "duration_seconds": <float>, "reasoning": "<1-2 sentences explaining why this is the strongest segment>", "hook": "<the opening line that grabs attention>"}}"""
-
-        suggestion = call_claude(api_key, prompt, max_tokens=400)
-
-        conn.execute(
-            """UPDATE clips SET status = 'ready',
-               ai_suggestion_start = ?, ai_suggestion_end = ?, ai_reasoning = ?
-               WHERE id = ?""",
-            (suggestion["start_seconds"], suggestion["end_seconds"],
-             suggestion.get("reasoning", ""), clip_id)
-        )
-        conn.commit()
-    except Exception as e:
-        # AI failure shouldn't block workflow — set to ready with error note
-        conn.execute(
-            "UPDATE clips SET status = 'ready', ai_reasoning = ? WHERE id = ?",
-            (f"AI analysis failed: {str(e)[:400]}", clip_id)
-        )
-        conn.commit()
-    finally:
-        conn.close()
-
-# ---------- Copy Generation ----------
-
-def generate_clip_copy(clip_id: str) -> tuple | None:
-    """Use Claude Haiku to write a title and description for a trimmed clip.
-    Returns (title, description) on success, None on failure."""
-    conn = get_db()
-    try:
-        clip = row_to_dict(conn.execute(
-            "SELECT id, transcript_json, trimmed_transcript, final_start, final_end, "
-            "ai_suggestion_start, ai_suggestion_end, window_seconds "
-            "FROM clips WHERE id = ?", (clip_id,)
-        ).fetchone())
-        config = load_config()
-        api_key = config.get("api_key", "")
-
-        if not clip or not clip["transcript_json"] or not api_key:
-            return None
-
-        # Prefer pre-stored trimmed transcript; fall back to on-the-fly extraction
-        trimmed_text = (clip.get("trimmed_transcript") or "").strip()
-        if not trimmed_text:
-            trim_start, trim_end = resolve_trim_range(clip)
-            transcript_data = json.loads(clip["transcript_json"])
-            trimmed_text = extract_trimmed_transcript(transcript_data, trim_start, trim_end)
-        if not trimmed_text.strip():
-            return None
-
-        channel_profile = config.get("channel_profile", "").strip()
-        profile_section = f"Channel profile: {channel_profile}\n\n" if channel_profile else ""
-
-        prompt = f"""{profile_section}You are a social media copywriter. Write a title, description, and tags for this YouTube Short.
-
-TRANSCRIPT:
-{trimmed_text}
-
-Rules:
-- Title: hook-first, ≤60 characters, no clickbait. Start with a relevant emoji.
-- Description: 2-3 sentences written in FIRST PERSON (I/we/my — the creator is posting this, not a third party). Conversational, works for both YouTube and X/Twitter.
-- Tags: 5-8 hashtags relevant to the topics discussed. Include ticker symbols as hashtags (e.g. #SOFI #BMNR #NBIS). Mix topic tags (#investing #earnings #stockmarket) with ticker tags.
-
-Respond in JSON only, no other text:
-{{"title": "...", "description": "...", "tags": "..."}}"""
-
-        result = call_claude(api_key, prompt, max_tokens=400, model=CLAUDE_SONNET)
-        title = result.get("title", "")
-        description = result.get("description", "")
-        tags = result.get("tags", "")
-        # Combine description + tags into one copyable block
-        if tags:
-            description = f"{description}\n\n{tags}"
-        conn.execute(
-            "UPDATE clips SET generated_title = ?, generated_description = ? WHERE id = ?",
-            (title, description, clip_id)
-        )
-        conn.commit()
-        return title, description
-    except Exception as e:
-        log.exception("Copy generation failed: %s", e)
-        return None
-    finally:
-        conn.close()
-
 # ---------- Export ----------
 
-def ass_timestamp(seconds: float) -> str:
-    """Convert seconds to ASS timestamp format: H:MM:SS.cc"""
-    h = int(seconds // 3600)
-    m = int((seconds % 3600) // 60)
-    s = int(seconds % 60)
-    cs = int((seconds % 1) * 100)
-    return f"{h}:{m:02d}:{s:02d}.{cs:02d}"
-
-def generate_ass_captions(transcript_json: str, trim_start: float, trim_end: float) -> str:
-    """Generate ASS subtitle file from Whisper word timestamps for a trimmed region."""
-    data = json.loads(transcript_json)
-
-    # Collect words within trim range
-    words = []
-    for seg in data.get("segments", []):
-        for w in seg.get("words", []):
-            if w["end"] > trim_start and w["start"] < trim_end:
-                words.append({
-                    "word": w["word"].strip(),
-                    "start": max(0, w["start"] - trim_start),
-                    "end": min(trim_end - trim_start, w["end"] - trim_start),
-                })
-
-    # Group words into lines (~7 words per line)
-    lines = []
-    current_line = []
-    for w in words:
-        current_line.append(w)
-        if len(current_line) >= 7:
-            lines.append(current_line)
-            current_line = []
-    if current_line:
-        lines.append(current_line)
-
-    # ASS header
-    ass = """[Script Info]
-Title: ClipCutter Captions
-ScriptType: v4.00+
-PlayResX: 1080
-PlayResY: 1920
-WrapStyle: 0
-
-[V4+ Styles]
-Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Default,Arial,58,&H00FFFFFF,&H000000FF,&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,4,0,2,40,40,80,1
-
-[Events]
-Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
-"""
-
-    for line_words in lines:
-        if not line_words:
-            continue
-        start = line_words[0]["start"]
-        end = line_words[-1]["end"]
-        text = " ".join(w["word"] for w in line_words)
-        ass += f"Dialogue: 0,{ass_timestamp(start)},{ass_timestamp(end)},Default,,0,0,0,,{text}\n"
-
-    return ass
-
-def export_clip(clip_id: str, captions: bool = True, vertical: bool = True):
-    """Export a clip as a final Short: trim, crop vertical, burn captions."""
+def export_clip(clip_id: str):
+    """Re-encode a clip's raw download to CFR MP4 in the output folder.
+    No trim (full raw range), no captions, no vertical crop — just DaVinci-ready CFR."""
     conn = get_db()
     try:
         clip = row_to_dict(conn.execute(
-            "SELECT id, session_id, note, raw_file, final_start, final_end, "
-            "ai_suggestion_start, ai_suggestion_end, transcript_json, window_seconds "
+            "SELECT id, session_id, note, raw_file, window_seconds "
             "FROM clips WHERE id = ?", (clip_id,)
         ).fetchone())
         if not clip or not clip["raw_file"]:
@@ -791,41 +472,13 @@ def export_clip(clip_id: str, captions: bool = True, vertical: bool = True):
         conn.execute("UPDATE clips SET status = 'exporting' WHERE id = ?", (clip_id,))
         conn.commit()
 
-        trim_start, trim_end = resolve_trim_range(clip)
-
         out_dir = get_session_output_dir(clip["session_id"])
         safe_note = sanitize_note(clip["note"] or "clip")
-        output_name = f"{safe_note}_{clip_id[:6]}.mp4"
-        output_path = out_dir / output_name
-
-        # Build ffmpeg filter chain
-        vfilters = []
-        ass_path = None
-
-        if captions and clip["transcript_json"]:
-            ass_content = generate_ass_captions(clip["transcript_json"], trim_start, trim_end)
-            # Write to /tmp with UUID name to avoid path escaping issues (spaces, colons)
-            ass_path = Path(f"/tmp/clipcutter_{clip_id}.ass")
-            ass_path.write_text(ass_content)
-
-        if vertical:
-            vfilters.append("crop=ih*9/16:ih")
-            vfilters.append("scale=1080:1920")
-
-        if ass_path:
-            vfilters.append(f"ass={ass_path}")
+        output_path = out_dir / f"{safe_note}_{clip_id[:6]}.mp4"
 
         cmd = [
             "ffmpeg", "-y",
             "-i", clip["raw_file"],
-            "-ss", str(trim_start),
-            "-to", str(trim_end),
-        ]
-
-        if vfilters:
-            cmd += ["-vf", ",".join(vfilters)]
-
-        cmd += [
             "-c:v", "libx264", "-preset", "fast", "-crf", "20",
             "-r", "30",
             "-c:a", "aac", "-b:a", "192k",
@@ -857,23 +510,22 @@ def export_clip(clip_id: str, captions: bool = True, vertical: bool = True):
     finally:
         conn.close()
 
-def export_all_clips(session_id: str, captions: bool = True, vertical: bool = True):
+
+def export_all_clips(session_id: str):
     """Export all ready clips in a session sequentially."""
-    conn = get_db()
-    try:
+    with with_db() as conn:
         clips = rows_to_list(conn.execute(
             "SELECT id FROM clips WHERE session_id = ? AND status = 'ready'",
             (session_id,)
         ).fetchall())
-    finally:
-        conn.close()
     for clip in clips:
-        export_clip(clip["id"], captions=captions, vertical=vertical)
+        export_clip(clip["id"])
+
 
 # ---------- Retry ----------
 
 def retry_clip(clip_id: str):
-    """Re-attempt a failed clip: re-download if needed, then transcribe + analyze."""
+    """Re-download a failed clip (skips if raw_file still exists)."""
     conn = get_db()
     try:
         clip = row_to_dict(conn.execute(
@@ -886,84 +538,76 @@ def retry_clip(clip_id: str):
         raw_exists = clip["raw_file"] and Path(clip["raw_file"]).exists()
 
         if raw_exists:
-            # Raw file exists — skip download, go straight to transcription
             conn.execute(
-                "UPDATE clips SET status = 'downloaded', error_text = '' WHERE id = ?",
+                "UPDATE clips SET status = 'ready', error_text = '' WHERE id = ?",
                 (clip_id,)
             )
             conn.commit()
-            conn.close()
-            transcribe_clip(clip_id)
-        else:
-            # Need to re-download
-            conn.execute(
-                "UPDATE clips SET status = 'downloading', error_text = '' WHERE id = ?",
-                (clip_id,)
-            )
-            conn.commit()
-
-            session = row_to_dict(conn.execute(
-                "SELECT youtube_url FROM sessions WHERE id = ?",
-                (clip["session_id"],)
-            ).fetchone())
-            if not session:
-                conn.close()
-                return
-
-            session_dir = SESSIONS_DIR / clip["session_id"] / "raw"
-            session_dir.mkdir(parents=True, exist_ok=True)
-
-            start_hms = seconds_to_hms(clip["start_seconds"])
-            end_hms = seconds_to_hms(clip["end_seconds"])
-            safe_note = sanitize_note(clip["note"] or "clip")
-            filename = f"{safe_note}_{clip_id[:6]}.mp4"
-            output_path = session_dir / filename
-            section_arg = f"*{start_hms}-{end_hms}"
-
-            ytdlp_cmd = get_ytdlp_cmd()
-            cmd = [
-                *ytdlp_cmd,
-                "--download-sections", section_arg,
-                "--force-keyframes-at-cuts",
-                "-f", "bestvideo[height<=1080][ext=mp4]+bestaudio[ext=m4a]/best[height<=1080][ext=mp4]/best",
-                "--merge-output-format", "mp4",
-                "-o", str(output_path),
-                "--no-playlist",
-                session["youtube_url"],
-            ]
-
-            try:
-                result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
-                if result.returncode == 0:
-                    conn.execute(
-                        "UPDATE clips SET status = 'downloaded', raw_file = ? WHERE id = ?",
-                        (str(output_path), clip_id)
-                    )
-                    conn.commit()
-                    conn.close()
-                    transcribe_clip(clip_id)
-                else:
-                    error_msg = result.stderr[-500:] if result.stderr else "Download failed"
-                    conn.execute(
-                        "UPDATE clips SET status = 'error', error_text = ? WHERE id = ?",
-                        (error_msg, clip_id)
-                    )
-                    conn.commit()
-                    conn.close()
-            except (subprocess.TimeoutExpired, FileNotFoundError) as e:
-                conn.execute(
-                    "UPDATE clips SET status = 'error', error_text = ? WHERE id = ?",
-                    (str(e)[:400], clip_id)
-                )
-                conn.commit()
-                conn.close()
             return
-    except Exception as e:
+
+        # Need to re-download
         conn.execute(
-            "UPDATE clips SET status = 'error', error_text = ? WHERE id = ?",
-            (f"Retry failed: {str(e)[:400]}", clip_id)
+            "UPDATE clips SET status = 'downloading', error_text = '' WHERE id = ?",
+            (clip_id,)
         )
         conn.commit()
+
+        session = row_to_dict(conn.execute(
+            "SELECT youtube_url FROM sessions WHERE id = ?",
+            (clip["session_id"],)
+        ).fetchone())
+        if not session:
+            return
+
+        session_dir = SESSIONS_DIR / clip["session_id"] / "raw"
+        session_dir.mkdir(parents=True, exist_ok=True)
+
+        start_hms = seconds_to_hms(clip["start_seconds"])
+        end_hms = seconds_to_hms(clip["end_seconds"])
+        safe_note = sanitize_note(clip["note"] or "clip")
+        output_path = session_dir / f"{safe_note}_{clip_id[:6]}.mp4"
+        section_arg = f"*{start_hms}-{end_hms}"
+
+        ytdlp_cmd = get_ytdlp_cmd()
+        cmd = [
+            *ytdlp_cmd,
+            "--download-sections", section_arg,
+            "-f", "best[height<=1080][ext=mp4]/bestvideo[height<=1080][ext=mp4]+bestaudio[ext=m4a]/best",
+            "--merge-output-format", "mp4",
+            "-o", str(output_path),
+            "--no-playlist",
+            session["youtube_url"],
+        ]
+
+        try:
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+            if result.returncode == 0:
+                conn.execute(
+                    "UPDATE clips SET status = 'ready', raw_file = ? WHERE id = ?",
+                    (str(output_path), clip_id)
+                )
+            else:
+                error_msg = result.stderr[-500:] if result.stderr else "Download failed"
+                conn.execute(
+                    "UPDATE clips SET status = 'error', error_text = ? WHERE id = ?",
+                    (error_msg, clip_id)
+                )
+            conn.commit()
+        except (subprocess.TimeoutExpired, FileNotFoundError) as e:
+            conn.execute(
+                "UPDATE clips SET status = 'error', error_text = ? WHERE id = ?",
+                (str(e)[:400], clip_id)
+            )
+            conn.commit()
+    except Exception as e:
+        try:
+            conn.execute(
+                "UPDATE clips SET status = 'error', error_text = ? WHERE id = ?",
+                (f"Retry failed: {str(e)[:400]}", clip_id)
+            )
+            conn.commit()
+        except Exception:
+            pass
     finally:
         try:
             conn.close()
@@ -1020,13 +664,10 @@ def run_session_downloads(session_id: str):
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
             if result.returncode == 0:
                 conn.execute(
-                    "UPDATE clips SET status = 'downloaded', raw_file = ? WHERE id = ?",
+                    "UPDATE clips SET status = 'ready', raw_file = ? WHERE id = ?",
                     (str(output_path), clip_id)
                 )
                 conn.commit()
-                conn.close()
-                transcribe_clip(clip_id)
-                conn = get_db()
                 continue
             else:
                 error_msg = result.stderr[-500:] if result.stderr else "Unknown error"
@@ -1124,658 +765,47 @@ def snipcut_convert_cfr(input_path: str, output_path: str, job_id: str, target_f
     return output_path, target_fps
 
 
-def snipcut_extract_audio(input_path: str, audio_path: str):
-    """Extract 16kHz mono PCM WAV for Whisper from the raw input."""
-    cmd = ["ffmpeg", "-y", "-i", input_path,
-           "-vn", "-acodec", "pcm_s16le", "-ar", "16000", "-ac", "1",
-           audio_path]
-    result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
-    if result.returncode != 0:
-        raise RuntimeError(f"Audio extract failed: {result.stderr[-300:]}")
-
-
-_faster_whisper_model = None
-_faster_whisper_lock = threading.Lock()
-
-
-def _get_faster_whisper():
-    global _faster_whisper_model
-    if _faster_whisper_model is None:
-        with _faster_whisper_lock:
-            if _faster_whisper_model is None:
-                from faster_whisper import WhisperModel
-                models_dir = str(APP_DIR / "faster_whisper_models")
-                log.info("Loading faster-whisper medium model")
-                _faster_whisper_model = WhisperModel("medium", device="cpu", compute_type="int8",
-                                                     download_root=models_dir)
-                log.info("faster-whisper ready")
-    return _faster_whisper_model
-
-
-def snipcut_transcribe(audio_path: str, job_id: str, duration: float) -> list:
-    """Transcribe with faster-whisper, word-level. Returns list of {word, start, end}."""
-    model = _get_faster_whisper()
-    segments, _ = model.transcribe(audio_path, language="en", word_timestamps=True)
-
-    words = []
-    for seg in segments:
-        if seg.words:
-            for w in seg.words:
-                words.append({"word": w.word.strip(), "start": float(w.start), "end": float(w.end)})
-            # Progress: latest end / duration
-            if duration > 0 and seg.end:
-                pct = min(98.0, (seg.end / duration) * 100)
-                _snipcut_update(job_id, transcribe_progress=pct)
-    _snipcut_update(job_id, transcribe_progress=100.0)
-    return words
-
-
-def snipcut_detect_silence(words: list, threshold: float = 2.5) -> list:
-    """Find gaps between words longer than threshold seconds."""
-    gaps = []
-    for i in range(len(words) - 1):
-        gap_start = words[i]["end"]
-        gap_end = words[i + 1]["start"]
-        duration = gap_end - gap_start
-        if duration > threshold:
-            gaps.append({"start": round(gap_start, 2), "end": round(gap_end, 2), "duration": round(duration, 2)})
-    return gaps
-
-
-def _snipcut_analyze_chunk(words_chunk: list, api_key: str) -> list:
-    """Analyze one chunk of words (~10 min) with Claude. Returns list of cuts."""
-    def fmt(w):
-        m = int(w["start"] // 60)
-        s = w["start"] % 60
-        return f"[{m}:{s:05.2f}] {w['word']}"
-
-    transcript_text = "\n".join(fmt(w) for w in words_chunk)
-
-    prompt = f"""You are a video editor analyzing a transcript with word-level timestamps. The speaker is recording a talking-head video about finance/stocks.
-
-Identify segments to CUT from the video.
-
-CUT these:
-1. **Filler words**: um, uh, ah, like (as filler), you know, I mean, sort of, kind of, basically, actually, right (as filler tag), so (sentence-starter filler)
-2. **Repeated takes**: speaker starts a thought, stumbles/restarts. ALWAYS keep the SECOND attempt, CUT the FIRST.
-
-Do NOT cut: intentional pauses, "like" as comparison, rhetorical questions, natural speech rhythm.
-
-TRANSCRIPT:
-{transcript_text}
-
-Respond with a JSON array of cuts ONLY — no wrapper object, just the array:
-[
-  {{"start": 12.45, "end": 12.90, "reason": "filler", "content": "um"}},
-  {{"start": 45.20, "end": 52.80, "reason": "repeated_take", "content": "First attempt of: ..."}}
-]
-
-If nothing needs cutting, return: []"""
-
-    import anthropic
-    text = anthropic.Anthropic(api_key=api_key).messages.create(
-        model="claude-sonnet-4-20250514",
-        max_tokens=16000,
-        messages=[{"role": "user", "content": prompt}],
-    ).content[0].text.strip()
-
-    # Extract JSON array
-    match = re.search(r'\[[\s\S]*\]', text)
-    if match:
-        text = match.group(0)
-
-    try:
-        result = json.loads(text)
-        return result if isinstance(result, list) else result.get("cuts", [])
-    except json.JSONDecodeError:
-        # Try to fix common issues: trailing comma before ]
-        cleaned = re.sub(r',\s*\]', ']', text)
-        cleaned = re.sub(r',\s*\}', '}', cleaned)
-        try:
-            result = json.loads(cleaned)
-            return result if isinstance(result, list) else result.get("cuts", [])
-        except json.JSONDecodeError:
-            log.error("SnipCut: JSON parse failed for chunk. Response: %s", text[:200])
-            return []
-
-
-def snipcut_analyze(words: list, api_key: str) -> dict:
-    """Analyze transcript in ~10-minute chunks, merge results."""
-    if not api_key or not words:
-        return {"cuts": [], "reasoning": "No API key or transcript" if not api_key else "Empty transcript"}
-
-    # Chunk words into ~10 min segments with 30s overlap
-    chunk_duration = 600  # 10 minutes
-    overlap = 30  # seconds
-    chunks = []
-    chunk_start_idx = 0
-
-    while chunk_start_idx < len(words):
-        chunk_end_time = words[chunk_start_idx]["start"] + chunk_duration
-        chunk_end_idx = chunk_start_idx
-        while chunk_end_idx < len(words) and words[chunk_end_idx]["start"] < chunk_end_time:
-            chunk_end_idx += 1
-        # Add overlap for context
-        overlap_end = chunk_end_time + overlap
-        actual_end_idx = chunk_end_idx
-        while actual_end_idx < len(words) and words[actual_end_idx]["start"] < overlap_end:
-            actual_end_idx += 1
-        chunks.append(words[chunk_start_idx:actual_end_idx])
-        chunk_start_idx = chunk_end_idx  # next chunk starts where this one ended (not overlap)
-
-    all_cuts = []
-    for i, chunk in enumerate(chunks):
-        log.info("SnipCut: analyzing chunk %d/%d (%d words, %.0fs-%.0fs)",
-                 i + 1, len(chunks), len(chunk), chunk[0]['start'], chunk[-1]['end'])
-        cuts = _snipcut_analyze_chunk(chunk, api_key)
-        all_cuts.extend(cuts)
-
-    # Deduplicate cuts that might overlap from chunk boundaries
-    seen = set()
-    unique = []
-    for c in all_cuts:
-        try:
-            key = (round(float(c["start"]), 1), round(float(c["end"]), 1))
-            if key not in seen:
-                seen.add(key)
-                unique.append(c)
-        except (KeyError, ValueError, TypeError):
-            continue
-
-    reasoning = f"Analyzed {len(chunks)} chunk{'s' if len(chunks) > 1 else ''}, found {len(unique)} cuts"
-    return {"cuts": unique, "reasoning": reasoning}
-
-
-def snipcut_generate_metadata(words: list, api_key: str) -> dict:
-    """Generate a YouTube title, description, and tags from the transcript."""
-    if not api_key or not words:
-        return {}
-
-    # Build a condensed transcript (first ~8 min + last ~2 min for context)
-    full_text = " ".join(w["word"] for w in words)
-    # Truncate to ~6000 chars to stay well within context limits
-    if len(full_text) > 6000:
-        full_text = full_text[:4500] + "\n\n[...middle trimmed...]\n\n" + full_text[-1500:]
-
-    prompt = f"""You are a YouTube content strategist. Given this transcript from a talking-head video about finance/stocks, generate metadata for publishing.
-
-TRANSCRIPT:
-{full_text}
-
-Respond with a JSON object ONLY — no markdown, no explanation:
-{{
-  "title": "Compelling YouTube title (50-70 chars, no clickbait)",
-  "description": "2-3 sentence description summarizing the key points. Write in third person. Include a call to action at the end.",
-  "tags": ["tag1", "tag2", "...up to 12 relevant tags for YouTube SEO"]
-}}"""
-
-    try:
-        import anthropic
-        text = anthropic.Anthropic(api_key=api_key).messages.create(
-            model="claude-sonnet-4-20250514",
-            max_tokens=1000,
-            messages=[{"role": "user", "content": prompt}],
-        ).content[0].text.strip()
-
-        match = re.search(r'\{[\s\S]*\}', text)
-        if match:
-            text = match.group(0)
-        result = json.loads(text)
-        if isinstance(result, dict) and "title" in result:
-            return result
-    except Exception as e:
-        log.exception("SnipCut: metadata generation failed: %s", e)
-    return {}
-
-
-def snipcut_snap_cuts_to_words(cuts: list, words: list, buffer_seconds: float = 0.05) -> list:
-    """Snap each cut's start/end to actual Whisper word boundaries.
-
-    Claude's timestamps are drawn from Whisper word timings but can drift
-    ±100-200ms, occasionally slicing mid-word. This function:
-      1. Finds all words whose midpoint falls inside the cut range.
-      2. Snaps cut.start -> first matched word.start, cut.end -> last word.end.
-      3. Adds a small breathing buffer (default 50ms) without eating adjacent words.
-      4. Drops cuts that become invalid (start >= end).
-
-    Cuts with no matching words (e.g. pure silence gaps) are left untouched.
-    """
-    if not words or not cuts:
-        return cuts
-
-    # Pre-sort words by start time for binary search
-    sorted_words = sorted(words, key=lambda w: w.get("start", 0))
-    starts = [w["start"] for w in sorted_words]
-
-    import bisect
-    snapped = []
-    for c in cuts:
-        try:
-            c_start = float(c["start"])
-            c_end = float(c["end"])
-        except (KeyError, ValueError, TypeError):
-            continue
-        if c_end <= c_start:
-            continue
-
-        # Find words whose MIDPOINT falls inside [c_start, c_end]
-        matched = []
-        # Narrow the search: words whose start >= c_start - max_word_len, up to c_end
-        lo = bisect.bisect_left(starts, c_start - 2.0)  # widen a bit for safety
-        for i in range(lo, len(sorted_words)):
-            w = sorted_words[i]
-            if w["start"] > c_end:
-                break
-            mid = (w["start"] + w["end"]) / 2
-            if c_start <= mid <= c_end:
-                matched.append((i, w))
-
-        if matched:
-            first_idx, first_word = matched[0]
-            last_idx, last_word = matched[-1]
-            new_start = first_word["start"]
-            new_end = last_word["end"]
-
-            # Apply buffer without eating adjacent words
-            prev_word = sorted_words[first_idx - 1] if first_idx > 0 else None
-            next_word = sorted_words[last_idx + 1] if last_idx + 1 < len(sorted_words) else None
-            new_start = max(new_start - buffer_seconds,
-                            (prev_word["end"] + buffer_seconds) if prev_word else 0.0)
-            new_end = new_end + buffer_seconds
-            if next_word:
-                new_end = min(new_end, next_word["start"] - buffer_seconds)
-
-            if new_end > new_start:
-                c = dict(c)  # don't mutate original
-                c["start"] = round(new_start, 3)
-                c["end"] = round(new_end, 3)
-                snapped.append(c)
-        else:
-            # No matched words — keep as-is (likely a silence gap that was already clean)
-            snapped.append(c)
-
-    return snapped
-
-
-def snipcut_merge_cuts(ai_cuts: list, silence_gaps: list, min_merge_gap: float = 0.2) -> list:
-    """Merge AI cuts + silence gaps into a unified sorted cut list.
-    Adjacent/overlapping cuts are consolidated."""
-    all_cuts = []
-    for c in ai_cuts:
-        try:
-            all_cuts.append({
-                "start": float(c["start"]), "end": float(c["end"]),
-                "reason": c.get("reason", "filler"),
-            })
-        except (KeyError, ValueError, TypeError):
-            continue
-    for g in silence_gaps:
-        try:
-            all_cuts.append({
-                "start": float(g["start"]), "end": float(g["end"]),
-                "reason": "silence",
-            })
-        except (KeyError, ValueError, TypeError):
-            continue
-
-    if not all_cuts:
-        return []
-
-    # Sort by start, then merge overlapping/adjacent
-    all_cuts.sort(key=lambda c: c["start"])
-    merged = [all_cuts[0]]
-    for c in all_cuts[1:]:
-        last = merged[-1]
-        if c["start"] <= last["end"] + min_merge_gap:
-            last["end"] = max(last["end"], c["end"])
-            # Combine reasons if different
-            if c["reason"] != last["reason"] and "merged" not in last["reason"]:
-                last["reason"] = "merged"
-        else:
-            merged.append(c)
-    return merged
-
-
-def snipcut_generate_clean_transcript(words: list, cuts: list, output_path: str):
-    """Reconstruct transcript text with cut words removed.
-    A word is removed if its midpoint falls inside any cut range."""
-    sorted_cuts = sorted(cuts, key=lambda c: c["start"])
-
-    def in_any_cut(midpoint: float) -> bool:
-        for c in sorted_cuts:
-            if c["start"] <= midpoint <= c["end"]:
-                return True
-            if c["start"] > midpoint:
-                break
-        return False
-
-    kept_words = []
-    for w in words:
-        mid = (w["start"] + w["end"]) / 2
-        if not in_any_cut(mid):
-            kept_words.append(w["word"].strip())
-
-    # Simple reflow: join words with spaces, wrap at ~80 chars
-    text = " ".join(kept_words)
-    lines = []
-    current = []
-    current_len = 0
-    for word in text.split():
-        if current_len + len(word) + 1 > 80 and current:
-            lines.append(" ".join(current))
-            current = [word]
-            current_len = len(word)
-        else:
-            current.append(word)
-            current_len += len(word) + 1
-    if current:
-        lines.append(" ".join(current))
-
-    Path(output_path).write_text("\n".join(lines) + "\n")
-
-
-def snipcut_generate_srt(merged_cuts: list, output_path: str):
-    """Generate an SRT subtitle file — one short entry per flagged moment.
-    Import into Resolve as a subtitle track for visual timeline markers."""
-    lines = []
-    for i, c in enumerate(merged_cuts, start=1):
-        start = c.get("start", 0)
-        end = c.get("end", 0)
-        # Clamp subtitle to 2 seconds max so it doesn't cover other content
-        sub_end = min(start + 2.0, end)
-        reason = (c.get("reason") or "cut").upper().replace("_", " ")
-        content = (c.get("content") or "").strip()
-        if reason == "SILENCE":
-            label = f"[SILENCE {end - start:.1f}s]"
-        elif content:
-            label = f"[{reason}] {content[:60]}"
-        else:
-            label = f"[{reason}]"
-        lines.append(str(i))
-        lines.append(f"{_srt_tc(start)} --> {_srt_tc(sub_end)}")
-        lines.append(label)
-        lines.append("")
-    Path(output_path).write_text("\n".join(lines), encoding="utf-8")
-
-
-def _srt_tc(seconds: float) -> str:
-    """Format seconds as SRT timecode: HH:MM:SS,mmm"""
-    h = int(seconds // 3600)
-    m = int((seconds % 3600) // 60)
-    s = int(seconds % 60)
-    ms = int((seconds % 1) * 1000)
-    return f"{h:02d}:{m:02d}:{s:02d},{ms:03d}"
-
-
-def snipcut_generate_resolve_script(merged_cuts: list, output_fps: int,
-                                     cfr_path: str = "", srt_path: str = "",
-                                     project_name: str = "") -> str:
-    """Generate a Lua script for Resolve's Console (Workspace → Console).
-    Creates project, imports media, builds timeline, adds markers, imports SRT."""
-    color_map = {
-        "silence": "Cyan",
-        "filler": "Yellow",
-        "repeated_take": "Red",
-        "merged": "Purple",
-        "cut": "Blue",
-    }
-
-    # Escape paths for Lua string literals
-    def lua_str(s):
-        return s.replace("\\", "\\\\").replace('"', '\\"')
-
-    marker_lua = []
-    for c in merged_cuts:
-        start = c.get("start", 0)
-        end = c.get("end", 0)
-        reason = (c.get("reason") or "cut")
-        color = color_map.get(reason, "Blue")
-        duration_frames = max(1, round((end - start) * output_fps))
-        frame_id = round(start * output_fps)
-        content = (c.get("content") or "").strip().replace('"', '\\"')[:80]
-        name = reason.upper().replace("_", " ")
-        note = f"gap {end - start:.1f}s" if reason == "silence" else (content or name)
-        marker_lua.append(
-            f'tl:AddMarker({frame_id}, "{color}", "{name}", "{note}", {duration_frames})'
-        )
-
-    lines = [
-        "-- SnipCut: paste into Resolve Console (Workspace > Console)",
-        'resolve = Resolve()',
-        'pm = resolve:GetProjectManager()',
-        '',
-        f'proj = pm:CreateProject("{lua_str(project_name)}")',
-        'if not proj then',
-        '  proj = pm:GetCurrentProject()',
-        f'  print("Project exists, using: " .. proj:GetName())',
-        'end',
-        '',
-    ]
-
-    if cfr_path:
-        lines += [
-            f'ms = resolve:GetMediaStorage()',
-            f'ms:AddItemListToMediaPool({{"{lua_str(cfr_path)}"}})',
-            'mp = proj:GetMediaPool()',
-            'clips = mp:GetRootFolder():GetClipList()',
-            'if #clips > 0 then',
-            '  tl = mp:CreateTimelineFromClips("Timeline 1", clips)',
-            '  print("Timeline created with " .. #clips .. " clip(s)")',
-        ]
-    else:
-        lines += [
-            'tl = proj:GetCurrentTimeline()',
-            'if tl then',
-        ]
-
-    if marker_lua:
-        for m in marker_lua:
-            lines.append(f'  {m}')
-        lines.append(f'  print("Added {len(marker_lua)} markers")')
-
-    if srt_path:
-        lines += [
-            f'  tl:ImportIntoTimeline("{lua_str(srt_path)}", {{}})',
-            '  print("SRT subtitles imported")',
-        ]
-
-    lines += [
-        'else',
-        '  print("No timeline — import media first")',
-        'end',
-    ]
-
-    return "\n".join(lines)
-
-
-def snipcut_finalize_outputs(job_id: str, input_path: str, cfr_output: str,
-                              ai_cuts: list, silence_gaps: list, words: list,
-                              duration: float, output_fps: int) -> dict:
-    """Generate SRT markers, Resolve Lua setup script, and clean transcript.
-    Re-probes CFR file for real fps as a safety check. Returns paths dict."""
-    try:
-        cfr_info = snipcut_probe(cfr_output)
-        actual_fps = round(cfr_info["fps"]) or output_fps
-        if actual_fps != output_fps:
-            log.info("SnipCut: CFR file is %dfps (expected %d) — using actual", actual_fps, output_fps)
-            output_fps = actual_fps
-            _snipcut_update(job_id, output_fps=output_fps)
-    except Exception as e:
-        log.warning("SnipCut: couldn't re-probe CFR (%s), using %dfps", e, output_fps)
-
-    merged_cuts = snipcut_merge_cuts(ai_cuts, silence_gaps)
-    title = Path(input_path).stem
-
-    transcript_path = ""
-    if words:
-        transcript_path = str(Path(input_path).with_name(f"{title}_transcript.txt"))
-        snipcut_generate_clean_transcript(words, merged_cuts, transcript_path)
-
-    srt_path = str(Path(input_path).with_name(f"{title}_markers.srt"))
-    snipcut_generate_srt(merged_cuts, srt_path)
-
-    resolve_script = snipcut_generate_resolve_script(
-        merged_cuts, output_fps,
-        cfr_path=cfr_output, srt_path=srt_path,
-        project_name=title,
-    )
-
-    return {"transcript_path": transcript_path, "srt_path": srt_path,
-            "resolve_script": resolve_script}
-
-
 def snipcut_process(job_id: str):
-    """Main orchestrator with checkpoint resume.
-    Reads DB state to skip completed steps — if CFR + transcript already exist
-    from a previous run that errored later, jumps straight to analysis."""
-    import concurrent.futures
-
-    conn = get_db()
-    try:
+    """Probe and CFR-convert a video. Checkpoint-safe: if the CFR file
+    already exists we skip re-conversion, useful for retries."""
+    with with_db() as conn:
         job = row_to_dict(conn.execute(
             "SELECT * FROM snipcut_jobs WHERE id = ?", (job_id,)
         ).fetchone())
-    finally:
-        conn.close()
 
     if not job:
         return
 
     input_path = job["input_path"]
     cfr_output = str(Path(input_path).with_name(f"{Path(input_path).stem}_cfr{Path(input_path).suffix}"))
-    audio_path = str(APP_DIR / f"snipcut_audio_{job_id}.wav")
 
     try:
-        # ── Checkpoint: probe ──
-        has_probe = job["duration_seconds"] and job["duration_seconds"] > 0
-        if has_probe:
-            info = {"duration": job["duration_seconds"], "is_vfr": bool(job["is_vfr"]),
-                    "width": job["width"], "height": job["height"]}
-            log.info("SnipCut: resuming — probe data exists (%.0fs)", info['duration'])
-        else:
+        # ── Probe (skip if we already have duration on file) ──
+        if not (job["duration_seconds"] and job["duration_seconds"] > 0):
             _snipcut_update(job_id, status="probing")
             info = snipcut_probe(input_path)
             _snipcut_update(job_id, duration_seconds=info["duration"],
                             is_vfr=1 if info["is_vfr"] else 0,
                             width=info["width"], height=info["height"])
-
-        # ── Checkpoint: CFR + transcript ──
-        has_cfr = job["cfr_output_path"] and os.path.exists(job["cfr_output_path"])
-        has_transcript = job["transcript_json"] and len(job["transcript_json"]) > 10
-
-        # Determine output fps — needed for EDL timecode generation
-        output_fps = job.get("output_fps") or 30
-
-        if has_cfr and has_transcript:
-            cfr_output = job["cfr_output_path"]
-            words = json.loads(job["transcript_json"])
-            # Re-probe to confirm fps (in case an older job is missing output_fps)
-            if not job.get("output_fps"):
-                try:
-                    cfr_info = snipcut_probe(cfr_output)
-                    output_fps = round(cfr_info["fps"]) or 30
-                    _snipcut_update(job_id, output_fps=output_fps)
-                except Exception:
-                    pass
-            log.info("SnipCut: resuming — CFR + transcript exist (%d words, %dfps)", len(words), output_fps)
         else:
-            # Need to run at least one of CFR or transcribe
+            log.info("SnipCut: resuming — probe data exists (%.0fs)", job["duration_seconds"])
+
+        # ── CFR convert (skip if output file already exists) ──
+        if job["cfr_output_path"] and os.path.exists(job["cfr_output_path"]):
+            log.info("SnipCut: CFR file already exists, skipping conversion")
+            output_fps = job.get("output_fps") or 30
+        elif os.path.exists(cfr_output):
+            log.info("SnipCut: found existing CFR file on disk, recording in DB")
+            output_fps = job.get("output_fps") or 30
+            _snipcut_update(job_id, cfr_output_path=cfr_output, cfr_progress=100.0)
+        else:
             _snipcut_update(job_id, status="processing")
+            cfr_output, output_fps = snipcut_convert_cfr(input_path, cfr_output, job_id)
+            _snipcut_update(job_id, output_fps=output_fps)
 
-            if has_cfr:
-                cfr_output = job["cfr_output_path"]
-                log.info("SnipCut: resuming — CFR exists, only transcribing")
-            elif os.path.exists(cfr_output):
-                # CFR file exists on disk but wasn't recorded in DB
-                _snipcut_update(job_id, cfr_output_path=cfr_output, cfr_progress=100.0)
-                has_cfr = True
-                log.info("SnipCut: found existing CFR file, skipping conversion")
-
-            # If CFR already exists (by any means), probe it for fps
-            if has_cfr and not job.get("output_fps"):
-                try:
-                    cfr_info = snipcut_probe(cfr_output)
-                    output_fps = round(cfr_info["fps"]) or 30
-                    _snipcut_update(job_id, output_fps=output_fps)
-                except Exception:
-                    pass
-
-            def cfr_task():
-                return snipcut_convert_cfr(input_path, cfr_output, job_id)
-
-            def transcribe_task():
-                snipcut_extract_audio(input_path, audio_path)
-                return snipcut_transcribe(audio_path, job_id, info["duration"])
-
-            with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
-                futures = {}
-                if not has_cfr:
-                    futures["cfr"] = pool.submit(cfr_task)
-                if not has_transcript:
-                    futures["tx"] = pool.submit(transcribe_task)
-
-                if "cfr" in futures:
-                    _, output_fps = futures["cfr"].result()
-                    _snipcut_update(job_id, output_fps=output_fps)
-                if "tx" in futures:
-                    words = futures["tx"].result()
-                elif has_transcript:
-                    words = json.loads(job["transcript_json"])
-
-            # Clean up audio
-            if os.path.exists(audio_path):
-                try: os.remove(audio_path)
-                except OSError: pass
-
-            _snipcut_update(job_id, transcript_json=json.dumps(words))
-
-        # ── Checkpoint: silence gaps ──
-        has_silence = job["silence_gaps_json"] and len(job["silence_gaps_json"]) > 2
-        if has_silence:
-            silence_gaps = json.loads(job["silence_gaps_json"])
-            log.info("SnipCut: resuming — silence gaps exist (%d gaps)", len(silence_gaps))
-        else:
-            silence_gaps = snipcut_detect_silence(words, threshold=2.5)
-            _snipcut_update(job_id, silence_gaps_json=json.dumps(silence_gaps))
-
-        # ── Checkpoint: Claude analysis ──
-        has_cuts = job["cuts_json"] and len(job["cuts_json"]) > 2
-        if has_cuts:
-            ai_cuts = json.loads(job["cuts_json"])
-            log.info("SnipCut: resuming — AI cuts exist (%d cuts)", len(ai_cuts))
-        else:
-            _snipcut_update(job_id, status="analyzing")
-            api_key = load_config().get("api_key", "")
-            result = snipcut_analyze(words, api_key)
-            # Snap to Whisper word edges with 50ms buffer so we never slice mid-word.
-            ai_cuts = snipcut_snap_cuts_to_words(result.get("cuts", []), words)
-            _snipcut_update(job_id, cuts_json=json.dumps(ai_cuts),
-                            analysis_reasoning=result.get("reasoning", ""))
-
-        # ── Checkpoint: metadata (title/desc/tags) ──
-        has_metadata = job.get("metadata_json") and len(job.get("metadata_json", "")) > 10
-        if not has_metadata:
-            api_key = load_config().get("api_key", "")
-            metadata = snipcut_generate_metadata(words, api_key)
-            if metadata:
-                _snipcut_update(job_id, metadata_json=json.dumps(metadata))
-                log.info("SnipCut: generated metadata — %s", metadata.get('title', '')[:60])
-
-        _snipcut_update(job_id, status="generating_outputs")
-        paths = snipcut_finalize_outputs(
-            job_id, input_path, cfr_output,
-            ai_cuts=ai_cuts, silence_gaps=silence_gaps, words=words,
-            duration=info["duration"], output_fps=output_fps,
-        )
-        _snipcut_update(job_id, transcript_path=paths["transcript_path"],
-                        srt_path=paths["srt_path"],
-                        resolve_script=paths["resolve_script"],
-                        status="done")
+        _snipcut_update(job_id, status="done")
 
     except Exception as e:
-        if os.path.exists(audio_path):
-            try: os.remove(audio_path)
-            except OSError: pass
         _snipcut_update(job_id, status="error", error_text=str(e)[:400])
 
 
@@ -1813,7 +843,7 @@ def api_get_config():
 def api_update_config():
     config = load_config()
     data = request.json
-    for key in ["api_key", "default_clip_window", "target_duration", "whisper_model", "output_dir", "channel_profile", "streambuddy_url", "streambuddy_token"]:
+    for key in ["api_key", "default_clip_window", "target_duration", "output_dir", "channel_profile", "streambuddy_url", "streambuddy_token"]:
         if key in data:
             config[key] = data[key]
     save_config(config)
@@ -1903,8 +933,8 @@ def api_list_sessions():
             SELECT s.*,
                    COUNT(c.id) AS clip_count,
                    SUM(CASE WHEN c.status = 'error' THEN 1 ELSE 0 END) AS error_count,
-                   SUM(CASE WHEN c.status IN ('downloading','transcribing','analyzing','exporting') THEN 1 ELSE 0 END) AS active_count,
-                   SUM(CASE WHEN c.status IN ('downloaded','transcribed','ready','exported') THEN 1 ELSE 0 END) AS done_count
+                   SUM(CASE WHEN c.status IN ('downloading','exporting') THEN 1 ELSE 0 END) AS active_count,
+                   SUM(CASE WHEN c.status IN ('ready','exported') THEN 1 ELSE 0 END) AS done_count
             FROM sessions s
             LEFT JOIN clips c ON c.session_id = s.id
             GROUP BY s.id
@@ -2002,35 +1032,6 @@ def api_get_clip(clip_id):
     clip["center_hms"] = seconds_to_hms(clip["center_seconds"])
     return jsonify(clip)
 
-@app.route("/api/clips/<clip_id>/transcript")
-def api_get_transcript(clip_id):
-    conn = get_db()
-    try:
-        row = conn.execute(
-            "SELECT transcript_json FROM clips WHERE id = ?", (clip_id,)
-        ).fetchone()
-    finally:
-        conn.close()
-    if not row:
-        return jsonify({"error": "Clip not found"}), 404
-    raw = row["transcript_json"]
-    if not raw:
-        return jsonify({"error": "No transcript available"}), 404
-    return Response(raw, mimetype="application/json")
-
-@app.route("/api/clips/<clip_id>/analyze", methods=["POST"])
-def api_analyze_clip(clip_id):
-    conn = get_db()
-    try:
-        clip = row_to_dict(conn.execute("SELECT id, status FROM clips WHERE id = ?", (clip_id,)).fetchone())
-    finally:
-        conn.close()
-    if not clip:
-        return jsonify({"error": "Clip not found"}), 404
-    thread = threading.Thread(target=analyze_clip, args=(clip_id,), daemon=True)
-    thread.start()
-    return jsonify({"ok": True, "message": "Analysis started"})
-
 @app.route("/api/clips/<clip_id>/video")
 def api_clip_video(clip_id):
     conn = get_db()
@@ -2045,137 +1046,18 @@ def api_clip_video(clip_id):
     except OSError:
         return jsonify({"error": "Video file not found"}), 404
 
-@app.route("/api/clips/<clip_id>/waveform")
-def api_clip_waveform(clip_id):
-    conn = get_db()
-    try:
-        row = conn.execute("SELECT raw_file, session_id FROM clips WHERE id = ?", (clip_id,)).fetchone()
-    finally:
-        conn.close()
-    if not row or not row["raw_file"]:
-        return jsonify({"error": "No video file"}), 404
-
-    # Check cache
-    cache_dir = SESSIONS_DIR / row["session_id"] / "waveforms"
-    cache_file = cache_dir / f"{clip_id}.json"
-    if cache_file.exists():
-        return Response(cache_file.read_text(), mimetype="application/json")
-
-    # Generate waveform: extract mono audio as raw f32le samples
-    raw_file = row["raw_file"]
-    cmd = [
-        "ffmpeg", "-i", raw_file,
-        "-ac", "1", "-ar", "8000",
-        "-f", "f32le", "-"
-    ]
-    try:
-        result = subprocess.run(cmd, capture_output=True, timeout=30)
-        if result.returncode != 0:
-            log.error("ffmpeg waveform error: %s", result.stderr.decode(errors='replace')[:500])
-            return jsonify({"error": "ffmpeg waveform extraction failed"}), 500
-    except (FileNotFoundError, subprocess.TimeoutExpired):
-        return jsonify({"error": "ffmpeg not available"}), 500
-
-    # Parse raw float samples and downsample to ~800 points
-    raw_bytes = result.stdout
-    num_samples = len(raw_bytes) // 4
-    if num_samples == 0:
-        return jsonify({"peaks": [], "duration": 0})
-
-    samples = struct.unpack(f"<{num_samples}f", raw_bytes)
-    target_points = 800
-    chunk_size = max(1, num_samples // target_points)
-    peaks = []
-    for i in range(0, num_samples, chunk_size):
-        chunk = samples[i:i + chunk_size]
-        peaks.append(max(abs(s) for s in chunk))
-
-    # Normalize
-    max_peak = max(peaks) if peaks else 1.0
-    if max_peak > 0:
-        peaks = [round(p / max_peak, 3) for p in peaks]
-
-    duration = num_samples / 8000.0  # sample rate is 8000
-    waveform_data = json.dumps({"peaks": peaks, "duration": round(duration, 2)})
-
-    # Cache
-    cache_dir.mkdir(parents=True, exist_ok=True)
-    cache_file.write_text(waveform_data)
-
-    return Response(waveform_data, mimetype="application/json")
-
-@app.route("/api/clips/<clip_id>/trim", methods=["PUT"])
-def api_save_trim(clip_id):
-    data = request.json
-    start = data.get("start")
-    end = data.get("end")
-    if start is None or end is None:
-        return jsonify({"error": "start and end required"}), 400
-    conn = get_db()
-    try:
-        conn.execute(
-            "UPDATE clips SET final_start = ?, final_end = ? WHERE id = ?",
-            (float(start), float(end), clip_id)
-        )
-        conn.commit()
-        # Compute and store trimmed transcript for faster copy generation later
-        row = conn.execute(
-            "SELECT raw_file, note, transcript_json FROM clips WHERE id = ?", (clip_id,)
-        ).fetchone()
-        if row and row["transcript_json"]:
-            trimmed_tx = extract_trimmed_transcript(
-                json.loads(row["transcript_json"]), float(start), float(end)
-            )
-            conn.execute(
-                "UPDATE clips SET trimmed_transcript = ? WHERE id = ?",
-                (trimmed_tx, clip_id)
-            )
-            conn.commit()
-        # Cut a trimmed copy to the clips folder (fast stream-copy, no re-encode)
-        row = conn.execute("SELECT raw_file, note, session_id FROM clips WHERE id = ?", (clip_id,)).fetchone()
-        if row and row["raw_file"] and Path(row["raw_file"]).exists():
-            out_dir = get_session_output_dir(row["session_id"])
-            safe_note = sanitize_note(row["note"] or "clip")
-            trimmed_path = out_dir / f"{safe_note}_{clip_id[:6]}_trimmed.mp4"
-            cmd = [
-                "ffmpeg", "-y",
-                "-i", row["raw_file"],
-                "-ss", str(float(start)),
-                "-to", str(float(end)),
-                "-c", "copy",
-                str(trimmed_path),
-            ]
-            threading.Thread(
-                target=lambda: subprocess.run(cmd, capture_output=True, timeout=60),
-                daemon=True,
-            ).start()
-    finally:
-        conn.close()
-    return jsonify({"ok": True})
-
 @app.route("/api/clips/<clip_id>/export", methods=["POST"])
 def api_export_clip(clip_id):
-    data = request.json or {}
-    captions = data.get("captions", True)
-    vertical = data.get("vertical", True)
-    conn = get_db()
-    try:
-        clip = row_to_dict(conn.execute("SELECT id, status FROM clips WHERE id = ?", (clip_id,)).fetchone())
-    finally:
-        conn.close()
+    with with_db() as conn:
+        clip = row_to_dict(conn.execute("SELECT id FROM clips WHERE id = ?", (clip_id,)).fetchone())
     if not clip:
         return jsonify({"error": "Clip not found"}), 404
-    thread = threading.Thread(target=export_clip, args=(clip_id, captions, vertical), daemon=True)
-    thread.start()
+    threading.Thread(target=export_clip, args=(clip_id,), daemon=True).start()
     return jsonify({"ok": True, "message": "Export started"})
 
 @app.route("/api/sessions/<session_id>/export-all", methods=["POST"])
 def api_export_all(session_id):
-    data = request.json or {}
-    captions = data.get("captions", True)
-    vertical = data.get("vertical", True)
-    thread = threading.Thread(target=export_all_clips, args=(session_id, captions, vertical), daemon=True)
-    thread.start()
+    threading.Thread(target=export_all_clips, args=(session_id,), daemon=True).start()
     return jsonify({"ok": True, "message": "Batch export started"})
 
 @app.route("/api/clips/<clip_id>/retry", methods=["POST"])
@@ -2190,14 +1072,6 @@ def api_retry_clip(clip_id):
     thread = threading.Thread(target=retry_clip, args=(clip_id,), daemon=True)
     thread.start()
     return jsonify({"ok": True, "message": "Retry started"})
-
-@app.route("/api/clips/<clip_id>/generate-copy", methods=["POST"])
-def api_generate_copy(clip_id):
-    result = generate_clip_copy(clip_id)
-    if result is None:
-        return jsonify({"error": "Generation failed — ensure clip has a transcript and API key is set"}), 400
-    title, description = result
-    return jsonify({"ok": True, "title": title, "description": description})
 
 @app.route("/api/sessions/<session_id>/scan-status")
 def api_scan_status(session_id):
@@ -2446,9 +1320,7 @@ def api_snipcut_list():
     try:
         rows = rows_to_list(conn.execute(
             "SELECT id, input_filename, status, error_text, duration_seconds, is_vfr, "
-            "cfr_output_path, cfr_progress, transcribe_progress, cuts_json, "
-            "analysis_reasoning, transcript_path, output_fps, metadata_json, "
-            "srt_path, resolve_script, created_at "
+            "cfr_output_path, cfr_progress, output_fps, created_at "
             "FROM snipcut_jobs ORDER BY created_at DESC LIMIT 20"
         ).fetchall())
     finally:
@@ -2571,37 +1443,6 @@ def api_fetch_from_streambuddy():
     except Exception as e:
         return jsonify({"error": f"Fetch failed for {endpoint}: {e}"}), 502
 
-
-@app.route("/api/snipcut/jobs/<job_id>/open-resolve", methods=["POST"])
-def api_snipcut_open_resolve(job_id):
-    """Copy Lua setup script to clipboard and launch DaVinci Resolve."""
-    conn = get_db()
-    try:
-        job = row_to_dict(conn.execute(
-            "SELECT resolve_script FROM snipcut_jobs WHERE id = ?",
-            (job_id,)
-        ).fetchone())
-    finally:
-        conn.close()
-    if not job:
-        return jsonify({"error": "Job not found"}), 404
-    script = job.get("resolve_script") or ""
-    if not script:
-        return jsonify({"error": "No script generated for this job"}), 400
-
-    # Copy script to clipboard via pbcopy
-    try:
-        proc = subprocess.run(["pbcopy"], input=script.encode("utf-8"), timeout=5)
-    except Exception as e:
-        return jsonify({"error": f"Clipboard copy failed: {e}"}), 500
-
-    # Launch Resolve (non-blocking)
-    try:
-        subprocess.Popen(["open", "-a", "DaVinci Resolve"])
-    except Exception:
-        pass  # Not fatal — user can open Resolve manually
-
-    return jsonify({"ok": True})
 
 
 # ---------- Entry Point ----------
