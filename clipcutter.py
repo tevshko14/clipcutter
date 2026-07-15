@@ -851,6 +851,44 @@ def api_update_config():
 
 # -- Sessions --
 
+def _create_clip_session(url: str, local_file: str, clip_specs: list) -> str:
+    """Create a session + clips and kick off workers. Returns session_id.
+    clip_specs: [{note, center, duration}] — start/end derived from center±half.
+    Source: local ffmpeg extraction when local_file is set, else yt-dlp from url."""
+    session_id = uuid.uuid4().hex[:12]
+    conn = get_db()
+    try:
+        conn.execute(
+            "INSERT INTO sessions (id, youtube_url, gather_phase) VALUES (?, ?, 'collecting')",
+            (session_id, url or "")
+        )
+        clip_ids = []
+        for spec in clip_specs:
+            center = max(0, int(spec["center"]))
+            duration = int(spec["duration"])
+            half = duration // 2
+            start = max(0, center - half)
+            end = center + half
+            clip_id = uuid.uuid4().hex[:10]
+            conn.execute(
+                """INSERT INTO clips (id, session_id, note, center_seconds, window_seconds,
+                   start_seconds, end_seconds, status)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, 'queued')""",
+                (clip_id, session_id, spec.get("note", ""), center, duration, start, end)
+            )
+            clip_ids.append(clip_id)
+        conn.commit()
+    finally:
+        conn.close()
+
+    for clip_id in clip_ids:
+        if local_file:
+            threading.Thread(target=extract_clip_local, args=(clip_id, local_file), daemon=True).start()
+        else:
+            threading.Thread(target=download_clip, args=(clip_id, url), daemon=True).start()
+    return session_id
+
+
 @app.route("/api/sessions", methods=["POST"])
 def api_create_session():
     data = request.json
@@ -868,7 +906,6 @@ def api_create_session():
         except FileNotFoundError as e:
             return jsonify({"error": f"File not found: {e}"}), 400
 
-    session_id = uuid.uuid4().hex[:12]
     config = load_config()
     default_duration = config.get("default_clip_window", 5) * 60
 
@@ -878,40 +915,15 @@ def api_create_session():
         if not parsed:
             return jsonify({"error": "No valid timestamps found"}), 400
 
-        conn = get_db()
-        try:
-            conn.execute(
-                "INSERT INTO sessions (id, youtube_url, gather_phase) VALUES (?, ?, 'collecting')",
-                (session_id, url or "")
-            )
-            clip_ids = []
-            for clip in parsed:
-                clip_id = uuid.uuid4().hex[:10]
-                conn.execute(
-                    """INSERT INTO clips (id, session_id, note, center_seconds, window_seconds,
-                       start_seconds, end_seconds, status)
-                       VALUES (?, ?, ?, ?, ?, ?, ?, 'queued')""",
-                    (clip_id, session_id, clip["note"], clip["center"],
-                     clip["duration"], clip["start"], clip["end"])
-                )
-                clip_ids.append(clip_id)
-            conn.commit()
-        finally:
-            conn.close()
-
-        if local_file:
-            # Local file mode: extract clips with ffmpeg (~1s each, no download)
-            for clip_id in clip_ids:
-                threading.Thread(target=extract_clip_local, args=(clip_id, local_file), daemon=True).start()
-        else:
-            # URL mode: download clips from YouTube
-            for clip_id in clip_ids:
-                threading.Thread(target=download_clip, args=(clip_id, url), daemon=True).start()
-
+        session_id = _create_clip_session(url, local_file, [
+            {"note": c["note"], "center": c["center"], "duration": c["duration"]}
+            for c in parsed
+        ])
         mode = "local" if local_file else "direct"
         return jsonify({"session_id": session_id, "clip_count": len(parsed), "mode": mode})
 
     # No timestamps — do Phase A scan
+    session_id = uuid.uuid4().hex[:12]
     conn = get_db()
     try:
         conn.execute(
@@ -1272,6 +1284,257 @@ def api_open_url():
     else:
         subprocess.Popen(["xdg-open", url])
     return jsonify({"ok": True})
+
+
+# ---------- Live Show Routes (v3) ----------
+
+def _show_state(show: dict) -> str:
+    if show.get("ended_at"):
+        return "ended"
+    if show.get("started_at"):
+        return "live"
+    return "pre"
+
+
+@app.route("/api/shows", methods=["POST"])
+def api_create_show():
+    data = request.json or {}
+    title = (data.get("title") or "").strip()[:200]
+    youtube_url = (data.get("youtube_url") or "").strip()
+    if not title:
+        return jsonify({"error": "Title required"}), 400
+    show_id = uuid.uuid4().hex[:12]
+    with with_db() as conn:
+        conn.execute(
+            "INSERT INTO shows (id, title, youtube_url) VALUES (?, ?, ?)",
+            (show_id, title, youtube_url)
+        )
+        conn.commit()
+    return jsonify({"ok": True, "show_id": show_id})
+
+
+@app.route("/api/shows", methods=["GET"])
+def api_list_shows():
+    with with_db() as conn:
+        rows = rows_to_list(conn.execute("""
+            SELECT s.*,
+                   SUM(CASE WHEN e.type = 'timestamp' THEN 1 ELSE 0 END) AS timestamp_count,
+                   SUM(CASE WHEN e.type = 'clip' THEN 1 ELSE 0 END) AS clip_count
+            FROM shows s
+            LEFT JOIN show_entries e ON e.show_id = s.id
+            GROUP BY s.id
+            ORDER BY s.created_at DESC
+            LIMIT 30
+        """).fetchall())
+    for r in rows:
+        r["state"] = _show_state(r)
+        r["timestamp_count"] = r["timestamp_count"] or 0
+        r["clip_count"] = r["clip_count"] or 0
+    return jsonify({"shows": rows})
+
+
+@app.route("/api/shows/<show_id>", methods=["GET"])
+def api_get_show(show_id):
+    with with_db() as conn:
+        show = row_to_dict(conn.execute(
+            "SELECT * FROM shows WHERE id = ?", (show_id,)
+        ).fetchone())
+        if not show:
+            return jsonify({"error": "Show not found"}), 404
+        entries = rows_to_list(conn.execute(
+            "SELECT * FROM show_entries WHERE show_id = ? ORDER BY elapsed_seconds ASC",
+            (show_id,)
+        ).fetchall())
+    show["state"] = _show_state(show)
+    show["entries"] = entries
+    return jsonify(show)
+
+
+@app.route("/api/shows/<show_id>", methods=["PUT"])
+def api_update_show(show_id):
+    data = request.json or {}
+    fields = {}
+    if "title" in data and (data["title"] or "").strip():
+        fields["title"] = data["title"].strip()[:200]
+    if "youtube_url" in data:
+        fields["youtube_url"] = (data["youtube_url"] or "").strip()
+    if not fields:
+        return jsonify({"error": "Nothing to update"}), 400
+    with with_db() as conn:
+        cols = ", ".join(f"{k} = ?" for k in fields)
+        cur = conn.execute(f"UPDATE shows SET {cols} WHERE id = ?",
+                           list(fields.values()) + [show_id])
+        conn.commit()
+        if cur.rowcount == 0:
+            return jsonify({"error": "Show not found"}), 404
+    return jsonify({"ok": True})
+
+
+@app.route("/api/shows/<show_id>/go-live", methods=["POST"])
+def api_show_go_live(show_id):
+    from datetime import datetime, timezone
+    with with_db() as conn:
+        show = row_to_dict(conn.execute(
+            "SELECT id, started_at, ended_at FROM shows WHERE id = ?", (show_id,)
+        ).fetchone())
+        if not show:
+            return jsonify({"error": "Show not found"}), 404
+        if show["started_at"]:
+            return jsonify({"ok": True, "already_live": True})
+        other = conn.execute(
+            "SELECT id, title FROM shows WHERE started_at IS NOT NULL AND ended_at IS NULL AND id != ?",
+            (show_id,)
+        ).fetchone()
+        if other:
+            return jsonify({"error": f'"{other["title"]}" is already live. End it first.'}), 409
+        now = datetime.now(timezone.utc).isoformat()
+        conn.execute("UPDATE shows SET started_at = ? WHERE id = ?", (now, show_id))
+        conn.commit()
+    return jsonify({"ok": True, "started_at": now})
+
+
+@app.route("/api/shows/<show_id>/end", methods=["POST"])
+def api_show_end(show_id):
+    from datetime import datetime, timezone
+    with with_db() as conn:
+        show = row_to_dict(conn.execute(
+            "SELECT id, started_at, ended_at FROM shows WHERE id = ?", (show_id,)
+        ).fetchone())
+        if not show:
+            return jsonify({"error": "Show not found"}), 404
+        if not show["started_at"]:
+            return jsonify({"error": "Show hasn't started"}), 400
+        if show["ended_at"]:
+            return jsonify({"ok": True, "already_ended": True})
+        now = datetime.now(timezone.utc).isoformat()
+        conn.execute("UPDATE shows SET ended_at = ? WHERE id = ?", (now, show_id))
+        conn.commit()
+    return jsonify({"ok": True, "ended_at": now})
+
+
+@app.route("/api/shows/<show_id>", methods=["DELETE"])
+def api_delete_show(show_id):
+    with with_db() as conn:
+        conn.execute("DELETE FROM shows WHERE id = ?", (show_id,))
+        conn.commit()
+    return jsonify({"ok": True})
+
+
+@app.route("/api/shows/<show_id>/entries", methods=["POST"])
+def api_add_show_entry(show_id):
+    data = request.json or {}
+    etype = data.get("type")
+    if etype not in ("timestamp", "clip"):
+        return jsonify({"error": "type must be timestamp|clip"}), 400
+    try:
+        elapsed = max(0, int(data.get("elapsed_seconds", 0)))
+    except (TypeError, ValueError):
+        return jsonify({"error": "elapsed_seconds must be an integer"}), 400
+    note = (data.get("note") or "").strip()[:500]
+
+    with with_db() as conn:
+        show = conn.execute("SELECT id FROM shows WHERE id = ?", (show_id,)).fetchone()
+        if not show:
+            return jsonify({"error": "Show not found"}), 404
+        entry_id = uuid.uuid4().hex[:12]
+        conn.execute(
+            "INSERT INTO show_entries (id, show_id, type, note, elapsed_seconds) VALUES (?, ?, ?, ?, ?)",
+            (entry_id, show_id, etype, note, elapsed)
+        )
+        conn.commit()
+    return jsonify({"ok": True, "entry_id": entry_id})
+
+
+@app.route("/api/show-entries/<entry_id>", methods=["PUT"])
+def api_update_show_entry(entry_id):
+    data = request.json or {}
+    fields = {}
+    if "note" in data:
+        fields["note"] = (data["note"] or "").strip()[:500]
+    if "type" in data:
+        if data["type"] not in ("timestamp", "clip"):
+            return jsonify({"error": "type must be timestamp|clip"}), 400
+        fields["type"] = data["type"]
+    if "elapsed_seconds" in data:
+        try:
+            fields["elapsed_seconds"] = max(0, int(data["elapsed_seconds"]))
+        except (TypeError, ValueError):
+            return jsonify({"error": "elapsed_seconds must be an integer"}), 400
+    if not fields:
+        return jsonify({"error": "Nothing to update"}), 400
+    with with_db() as conn:
+        cols = ", ".join(f"{k} = ?" for k in fields)
+        cur = conn.execute(f"UPDATE show_entries SET {cols} WHERE id = ?",
+                           list(fields.values()) + [entry_id])
+        conn.commit()
+        if cur.rowcount == 0:
+            return jsonify({"error": "Entry not found"}), 404
+    return jsonify({"ok": True})
+
+
+@app.route("/api/show-entries/<entry_id>", methods=["DELETE"])
+def api_delete_show_entry(entry_id):
+    with with_db() as conn:
+        conn.execute("DELETE FROM show_entries WHERE id = ?", (entry_id,))
+        conn.commit()
+    return jsonify({"ok": True})
+
+
+@app.route("/api/shows/<show_id>/get-clips", methods=["POST"])
+def api_show_get_clips(show_id):
+    """One-click: turn this show's clip-type entries into a clip session."""
+    data = request.json or {}
+    source = data.get("source")
+    if source not in ("url", "local"):
+        return jsonify({"error": "source must be url|local"}), 400
+    try:
+        offset = int(data.get("offset_seconds") or 0)
+    except (TypeError, ValueError):
+        return jsonify({"error": "offset_seconds must be an integer"}), 400
+
+    with with_db() as conn:
+        show = row_to_dict(conn.execute(
+            "SELECT * FROM shows WHERE id = ?", (show_id,)
+        ).fetchone())
+        if not show:
+            return jsonify({"error": "Show not found"}), 404
+        clip_entries = rows_to_list(conn.execute(
+            "SELECT note, elapsed_seconds FROM show_entries "
+            "WHERE show_id = ? AND type = 'clip' ORDER BY elapsed_seconds ASC",
+            (show_id,)
+        ).fetchall())
+
+    if not show["ended_at"]:
+        return jsonify({"error": "End the show first"}), 400
+    if not clip_entries:
+        return jsonify({"error": "No Potential Clips entries on this show"}), 400
+
+    # Allow overriding the stored URL at get-clips time
+    url = (data.get("youtube_url") or show.get("youtube_url") or "").strip()
+    local_file = ""
+    if source == "local":
+        try:
+            local_file = str(resolve_user_path(data.get("local_file") or ""))
+        except FileNotFoundError as e:
+            return jsonify({"error": f"File not found: {e}"}), 400
+    elif not url:
+        return jsonify({"error": "No YouTube URL on this show — add one or use a local file"}), 400
+
+    default_duration = load_config().get("default_clip_window", 5) * 60
+    session_id = _create_clip_session(url, local_file, [
+        {"note": e["note"] or "clip", "center": e["elapsed_seconds"] + offset,
+         "duration": default_duration}
+        for e in clip_entries
+    ])
+
+    with with_db() as conn:
+        conn.execute("UPDATE shows SET generated_session_id = ?, youtube_url = ? WHERE id = ?",
+                     (session_id, url, show_id))
+        conn.commit()
+
+    log.info("Show %s -> session %s (%d clips, offset %+ds, source=%s)",
+             show_id, session_id, len(clip_entries), offset, source)
+    return jsonify({"ok": True, "session_id": session_id, "clip_count": len(clip_entries)})
 
 
 # ---------- SnipCut Routes ----------

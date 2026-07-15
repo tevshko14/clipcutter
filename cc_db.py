@@ -98,7 +98,32 @@ def init_db():
     """)
     conn.commit()
 
-    # Migrations — each wrapped so re-running on an existing DB is a no-op.
+    # SnipCut jobs table
+    conn.executescript("""
+        CREATE TABLE IF NOT EXISTS snipcut_jobs (
+            id TEXT PRIMARY KEY,
+            input_path TEXT NOT NULL,
+            input_filename TEXT DEFAULT '',
+            status TEXT DEFAULT 'queued',
+            error_text TEXT DEFAULT '',
+            duration_seconds REAL DEFAULT 0,
+            is_vfr INTEGER DEFAULT 0,
+            width INTEGER DEFAULT 0,
+            height INTEGER DEFAULT 0,
+            cfr_output_path TEXT DEFAULT '',
+            cfr_progress REAL DEFAULT 0,
+            transcribe_progress REAL DEFAULT 0,
+            transcript_json TEXT DEFAULT '',
+            silence_gaps_json TEXT DEFAULT '',
+            cuts_json TEXT DEFAULT '',
+            analysis_reasoning TEXT DEFAULT '',
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP
+        );
+    """)
+    conn.commit()
+
+    # Migrations — run AFTER all CREATEs so a brand-new DB doesn't hit
+    # 'no such table'. Each is wrapped so re-running is a no-op.
     # Columns from deleted features (edl_path, markers_path, refined_*, mode,
     # resolve_status) are intentionally NOT dropped: SQLite can't drop columns
     # cleanly, and leaving them harmless avoids a destructive migration.
@@ -122,27 +147,29 @@ def init_db():
                 raise
     conn.commit()
 
-    # SnipCut jobs table
+    # Live Show tables (v3) — solo timestamp capture during a stream.
+    # State is derived: pre (no started_at) -> live (started_at) -> ended (ended_at).
     conn.executescript("""
-        CREATE TABLE IF NOT EXISTS snipcut_jobs (
+        CREATE TABLE IF NOT EXISTS shows (
             id TEXT PRIMARY KEY,
-            input_path TEXT NOT NULL,
-            input_filename TEXT DEFAULT '',
-            status TEXT DEFAULT 'queued',
-            error_text TEXT DEFAULT '',
-            duration_seconds REAL DEFAULT 0,
-            is_vfr INTEGER DEFAULT 0,
-            width INTEGER DEFAULT 0,
-            height INTEGER DEFAULT 0,
-            cfr_output_path TEXT DEFAULT '',
-            cfr_progress REAL DEFAULT 0,
-            transcribe_progress REAL DEFAULT 0,
-            transcript_json TEXT DEFAULT '',
-            silence_gaps_json TEXT DEFAULT '',
-            cuts_json TEXT DEFAULT '',
-            analysis_reasoning TEXT DEFAULT '',
+            title TEXT NOT NULL,
+            youtube_url TEXT DEFAULT '',
+            started_at TEXT,
+            ended_at TEXT,
+            generated_session_id TEXT DEFAULT '',
             created_at TEXT DEFAULT CURRENT_TIMESTAMP
         );
+
+        CREATE TABLE IF NOT EXISTS show_entries (
+            id TEXT PRIMARY KEY,
+            show_id TEXT NOT NULL REFERENCES shows(id) ON DELETE CASCADE,
+            type TEXT NOT NULL CHECK (type IN ('timestamp','clip')),
+            note TEXT DEFAULT '',
+            elapsed_seconds INTEGER NOT NULL,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE INDEX IF NOT EXISTS idx_show_entries_show
+            ON show_entries(show_id, elapsed_seconds);
     """)
     conn.commit()
 

@@ -909,6 +909,124 @@
   }
 .snipcut-copy-btn:hover { color: var(--text); border-color: var(--text-dim); }
 
+  /* ── Live Show ── */
+  .live-dot {
+    width: 10px; height: 10px; border-radius: 50%;
+    background: var(--red);
+    animation: pulse 1.5s ease-in-out infinite;
+    flex-shrink: 0;
+  }
+  @keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.35; }
+  }
+  .live-capture-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 14px;
+  }
+  @media (max-width: 620px) {
+    .live-capture-grid { grid-template-columns: 1fr; }
+  }
+  .live-capture-section {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 14px;
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+  }
+  .live-capture-section input[type="text"] {
+    flex: 1;
+    min-width: 0;
+  }
+  .capture-chip {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--accent);
+    background: var(--accent-glow, rgba(244,63,94,0.1));
+    border: 1px solid rgba(244,63,94,0.25);
+    border-radius: 5px;
+    padding: 4px 8px;
+    white-space: nowrap;
+    flex-shrink: 0;
+  }
+  .live-entry-list {
+    margin-top: 10px;
+    max-height: 340px;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+  }
+  .live-entry-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 8px;
+    border-radius: 6px;
+    background: var(--surface-2);
+    font-size: 12px;
+    min-width: 0;
+  }
+  .live-entry-row.editing { background: var(--surface-3); }
+  .live-entry-time {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--accent);
+    min-width: 52px;
+    flex-shrink: 0;
+  }
+  .live-entry-note {
+    flex: 1;
+    color: var(--text);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    min-width: 0;
+  }
+  .live-entry-actions {
+    display: none;
+    gap: 2px;
+    flex-shrink: 0;
+  }
+  .live-entry-row:hover .live-entry-actions { display: flex; }
+  .live-entry-actions button {
+    background: none;
+    border: none;
+    color: var(--text-dimmer);
+    cursor: pointer;
+    font-size: 12px;
+    padding: 2px 5px;
+    border-radius: 4px;
+  }
+  .live-entry-actions button:hover { color: var(--text); background: var(--surface-3); }
+  .live-getclips-panel {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 16px;
+  }
+  .live-source-btn {
+    font-family: var(--mono);
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    padding: 6px 14px;
+    border-radius: 6px;
+    background: var(--surface-2);
+    color: var(--text-dim);
+    border: 1px solid var(--border);
+    cursor: pointer;
+  }
+  .live-source-btn:hover { color: var(--text); }
+  .live-source-btn.active {
+    background: var(--accent);
+    color: #fff;
+    border-color: var(--accent);
+  }
+
   /* ── Step Bar ── */
   .step-bar {
     display: flex;
@@ -994,7 +1112,8 @@
 
   <!-- Tabs -->
   <div class="tabs">
-    <button class="tab active" data-view="new" onclick="switchView('new')">New Session</button>
+    <button class="tab active" data-view="live" onclick="switchView('live')">Live</button>
+    <button class="tab" data-view="new" onclick="switchView('new')">New Session</button>
     <button class="tab" data-view="clips" onclick="switchView('clips')">Clips</button>
     <button class="tab" data-view="snipcut" onclick="switchView('snipcut')">SnipCut</button>
     <button class="tab" data-view="history" onclick="switchView('history')">History</button>
@@ -1004,7 +1123,14 @@
   <div class="setup-banner" id="setupBanner"></div>
 
   <!-- ══ NEW SESSION VIEW ══ -->
-  <div class="view active" id="view-new">
+  <!-- ══ LIVE SHOW VIEW ══ -->
+  <div class="view active" id="view-live">
+    <div id="liveContent">
+      <div class="empty"><div class="empty-icon">&#128308;</div><div class="empty-title">Loading…</div></div>
+    </div>
+  </div>
+
+  <div class="view" id="view-new">
     <div id="welcomeHint" class="ai-banner" style="display:none;">&#127916; Paste a YouTube livestream URL — ClipCutter will find the best clips automatically</div>
     <div class="field">
       <label>YouTube URL</label>
@@ -1245,6 +1371,8 @@ function switchView(name) {
   if (name === 'history') loadHistory();
   if (name === 'clips' && currentSessionId) loadSession(currentSessionId);
   if (name === 'snipcut') loadSnipcutJobs();
+  if (name === 'live') loadLiveTab();
+  if (name !== 'live') stopLiveTimer();
 }
 
 // ── Dep check + config ──
@@ -1291,6 +1419,7 @@ function switchView(name) {
       populatePendingSession(sessionData);
     }
   } catch(e) {}
+  loadLiveTab();
 })();
 
 function populatePendingSession(session) {
@@ -1301,7 +1430,7 @@ function populatePendingSession(session) {
   if (pasteField) pasteField.value = session.timestamps || '';
   if (section) section.style.display = 'block';
   clearLocalFile();
-  switchView('home');
+  switchView('new');
   const label = session.title ? `: ${session.title}` : '';
   const hint = session.youtube_url
     ? 'Use the YouTube URL or browse a local file below'
@@ -1909,6 +2038,433 @@ async function gatherSession(sessionId) {
   currentSuggestions = [];
   startPolling(sessionId);
   loadSession(sessionId);
+}
+
+// ── Live Show (v3) ──
+let currentShow = null;           // full show object with entries
+let liveTimerInterval = null;
+let livePendingCapture = { timestamp: null, clip: null };  // elapsed at first keystroke
+let liveEditingEntryId = null;    // entry currently in inline-edit mode
+let liveClipsSource = 'local';    // 'local' | 'url' — get-clips panel state
+let liveClipsFile = '';           // picked local file path
+
+function fmtHMS(sec) {
+  sec = Math.max(0, Math.floor(sec));
+  const h = Math.floor(sec / 3600);
+  const m = Math.floor((sec % 3600) / 60);
+  const s = sec % 60;
+  return h > 0 ? `${h}:${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`
+               : `${m}:${String(s).padStart(2,'0')}`;
+}
+
+function parseHMS(str) {
+  const parts = (str || '').trim().split(':').map(p => parseInt(p, 10));
+  if (parts.some(isNaN) || parts.length < 1 || parts.length > 3) return null;
+  if (parts.length === 3) return parts[0] * 3600 + parts[1] * 60 + parts[2];
+  if (parts.length === 2) return parts[0] * 60 + parts[1];
+  return parts[0];
+}
+
+function showElapsed(show) {
+  if (!show.started_at) return 0;
+  const end = show.ended_at ? new Date(show.ended_at).getTime() : Date.now();
+  return Math.max(0, Math.floor((end - new Date(show.started_at).getTime()) / 1000));
+}
+
+function stopLiveTimer() {
+  if (liveTimerInterval) { clearInterval(liveTimerInterval); liveTimerInterval = null; }
+}
+
+async function loadLiveTab() {
+  try {
+    const d = await api('GET', '/api/shows');
+    const shows = d.shows || [];
+    const liveShow = shows.find(s => s.state === 'live');
+    if (liveShow) { openShow(liveShow.id); return; }
+    // If we were viewing a show, keep viewing it; otherwise show the lobby
+    if (currentShow) { openShow(currentShow.id); return; }
+    renderLiveLobby(shows);
+  } catch(e) {
+    $('liveContent').innerHTML = '<div class="empty"><div class="empty-title">Failed to load shows</div></div>';
+  }
+}
+
+function renderLiveLobby(shows) {
+  stopLiveTimer();
+  currentShow = null;
+  let html = `
+    <div class="field">
+      <label>Show Title</label>
+      <input type="text" id="newShowTitle" placeholder="e.g. Fiesta Friday — Apr 24" onkeydown="if(event.key==='Enter')createShow()">
+    </div>
+    <div class="field">
+      <label>YouTube URL <span style="color:var(--text-dimmer);text-transform:none;letter-spacing:0;">(optional — can add later)</span></label>
+      <input type="text" id="newShowUrl" placeholder="https://www.youtube.com/watch?v=..." onkeydown="if(event.key==='Enter')createShow()">
+    </div>
+    <div class="btn-row">
+      <button class="btn-primary" onclick="createShow()">&#127916; New Show</button>
+    </div>`;
+
+  if (shows.length > 0) {
+    html += '<div class="section-label" style="margin-top:28px;">Past Shows</div><div class="session-list">';
+    shows.forEach(s => {
+      const date = new Date(s.created_at + (s.created_at.includes('Z') || s.created_at.includes('+') ? '' : 'Z'))
+        .toLocaleDateString('en-US', {month:'short', day:'numeric'});
+      const dur = (s.started_at && s.ended_at) ? fmtHMS(showElapsed(s)) : '';
+      const stateBadge = s.state === 'live'
+        ? '<span class="clip-badge error" style="font-size:9px;">&#9679; LIVE</span>'
+        : s.state === 'ended'
+          ? '<span class="clip-badge exported" style="font-size:9px;">ended</span>'
+          : '<span class="clip-badge queued" style="font-size:9px;">not started</span>';
+      html += `
+        <div class="session-card" onclick="openShow('${s.id}')">
+          <div style="flex:1;min-width:0;">
+            <div style="font-size:13px;font-weight:500;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(s.title)}</div>
+            <div style="font-family:var(--mono);font-size:11px;color:var(--text-dim);margin-top:2px;">
+              ${date}${dur ? ' · ' + dur : ''} · ${s.timestamp_count} ts · ${s.clip_count} clips
+            </div>
+          </div>
+          <div style="display:flex;gap:6px;align-items:center;flex-shrink:0;">
+            ${stateBadge}
+            ${s.state === 'ended' && s.clip_count > 0 ? `<button class="btn-ghost btn-sm" onclick="event.stopPropagation(); openShow('${s.id}')" style="font-size:10px;padding:3px 10px;">Get Clips</button>` : ''}
+            <button class="delete-btn" onclick="event.stopPropagation(); deleteShow('${s.id}')" title="Delete show">&#10005;</button>
+          </div>
+        </div>`;
+    });
+    html += '</div>';
+  }
+  $('liveContent').innerHTML = html;
+}
+
+async function createShow() {
+  const title = ($('newShowTitle').value || '').trim();
+  const url = ($('newShowUrl').value || '').trim();
+  if (!title) { toast('Enter a show title'); return; }
+  const d = await api('POST', '/api/shows', {title, youtube_url: url});
+  if (d.error) { toast(d.error); return; }
+  openShow(d.show_id);
+}
+
+async function openShow(showId) {
+  const d = await api('GET', `/api/shows/${showId}`);
+  if (d.error) { toast(d.error); loadLiveTab(); return; }
+  currentShow = d;
+  liveEditingEntryId = null;
+  renderShow();
+}
+
+async function deleteShow(showId) {
+  if (!confirm('Delete this show and all its entries?')) return;
+  await api('DELETE', `/api/shows/${showId}`);
+  if (currentShow && currentShow.id === showId) currentShow = null;
+  loadLiveTab();
+}
+
+function renderShow() {
+  const s = currentShow;
+  if (!s) { loadLiveTab(); return; }
+  if (s.state === 'pre') renderShowPre();
+  else if (s.state === 'live') renderShowLive();
+  else renderShowEnded();
+}
+
+function renderShowPre() {
+  stopLiveTimer();
+  const s = currentShow;
+  $('liveContent').innerHTML = `
+    <button class="btn-ghost btn-sm" onclick="currentShow=null; loadLiveTab()" style="margin-bottom:14px;">&larr; All shows</button>
+    <div style="text-align:center;padding:24px 0;">
+      <div style="font-size:20px;font-weight:600;color:var(--text);margin-bottom:6px;">${esc(s.title)}</div>
+      <div style="font-family:var(--mono);font-size:11px;color:var(--text-dimmer);margin-bottom:24px;">Not started</div>
+      <button class="btn-primary" onclick="goLiveShow()" style="padding:16px 48px;font-size:17px;font-weight:700;">&#9679; Go Live</button>
+      <div class="hint" style="margin-top:10px;">Click when your stream actually starts — the timer begins here.</div>
+    </div>
+    <div class="field" style="margin-top:16px;">
+      <label>YouTube URL</label>
+      <input type="text" id="showUrlInput" value="${esc(s.youtube_url || '')}" placeholder="https://www.youtube.com/watch?v=..."
+        onblur="saveShowUrl()" onkeydown="if(event.key==='Enter'){this.blur();}">
+      <div class="hint">Optional now — needed later only if you Get Clips from URL instead of a local file.</div>
+    </div>
+    <div style="text-align:center;margin-top:20px;">
+      <button class="btn-ghost btn-sm" onclick="deleteShow('${s.id}')" style="color:var(--red);font-size:11px;">Delete show</button>
+    </div>`;
+}
+
+async function saveShowUrl() {
+  const input = $('showUrlInput');
+  if (!input || !currentShow) return;
+  const url = input.value.trim();
+  if (url === (currentShow.youtube_url || '')) return;
+  await api('PUT', `/api/shows/${currentShow.id}`, {youtube_url: url});
+  currentShow.youtube_url = url;
+}
+
+async function goLiveShow() {
+  const d = await api('POST', `/api/shows/${currentShow.id}/go-live`);
+  if (d.error) { toast(d.error); return; }
+  openShow(currentShow.id);
+}
+
+async function endShow() {
+  if (!confirm('End the show? The timer stops — you can still edit entries and Get Clips after.')) return;
+  const d = await api('POST', `/api/shows/${currentShow.id}/end`);
+  if (d.error) { toast(d.error); return; }
+  livePendingCapture = { timestamp: null, clip: null };
+  openShow(currentShow.id);
+}
+
+function renderShowLive() {
+  const s = currentShow;
+  $('liveContent').innerHTML = `
+    <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:18px;flex-wrap:wrap;">
+      <div style="min-width:0;">
+        <div style="font-size:15px;font-weight:600;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(s.title)}</div>
+        <div style="display:flex;align-items:center;gap:8px;margin-top:4px;">
+          <span class="live-dot"></span>
+          <span style="font-family:var(--mono);font-size:10px;color:var(--red);font-weight:700;letter-spacing:2px;">LIVE</span>
+          <span id="liveTimer" style="font-family:var(--mono);font-size:26px;font-weight:700;color:var(--red);">0:00</span>
+        </div>
+      </div>
+      <button class="btn-primary" onclick="endShow()" style="background:var(--red);padding:12px 24px;font-size:14px;font-weight:700;">&#9632; End Show</button>
+    </div>
+    <div class="live-capture-grid">
+      ${renderCaptureSection('timestamp', 'Timestamps', 'Moment worth noting — chapters, references')}
+      ${renderCaptureSection('clip', 'Potential Clips', 'This should become a short')}
+    </div>`;
+  startLiveTimerDisplay();
+  renderEntryLists();
+}
+
+function renderCaptureSection(type, title, hint) {
+  return `
+    <div class="live-capture-section">
+      <div class="section-label" style="margin-bottom:8px;">${title}</div>
+      <div style="display:flex;gap:6px;align-items:center;">
+        <input type="text" id="capture-${type}" placeholder="${hint}" autocomplete="off"
+          oninput="captureInputChanged('${type}')"
+          onkeydown="if(event.key==='Enter')submitCapture('${type}')">
+        <span id="capture-chip-${type}" class="capture-chip" style="display:none;"></span>
+      </div>
+      <div id="entries-${type}" class="live-entry-list"></div>
+    </div>`;
+}
+
+function startLiveTimerDisplay() {
+  stopLiveTimer();
+  const tick = () => {
+    const el = $('liveTimer');
+    if (!el || !currentShow || !currentShow.started_at) return;
+    el.textContent = fmtHMS(showElapsed(currentShow));
+  };
+  tick();
+  liveTimerInterval = setInterval(tick, 1000);
+}
+
+function captureInputChanged(type) {
+  const input = $(`capture-${type}`);
+  const chip = $(`capture-chip-${type}`);
+  if (!input) return;
+  if (input.value.length > 0 && livePendingCapture[type] === null) {
+    // First keystroke — this is the moment that gets recorded
+    livePendingCapture[type] = showElapsed(currentShow);
+  } else if (input.value.length === 0) {
+    livePendingCapture[type] = null;
+  }
+  if (chip) {
+    if (livePendingCapture[type] !== null) {
+      chip.textContent = '@ ' + fmtHMS(livePendingCapture[type]);
+      chip.style.display = 'inline-block';
+    } else {
+      chip.style.display = 'none';
+    }
+  }
+}
+
+async function submitCapture(type) {
+  const input = $(`capture-${type}`);
+  if (!input || !currentShow) return;
+  const note = input.value.trim();
+  const elapsed = livePendingCapture[type] !== null ? livePendingCapture[type] : showElapsed(currentShow);
+  input.value = '';
+  livePendingCapture[type] = null;
+  captureInputChanged(type);
+  const d = await api('POST', `/api/shows/${currentShow.id}/entries`, {type, note, elapsed_seconds: elapsed});
+  if (d.error) { toast(d.error); return; }
+  currentShow.entries.push({id: d.entry_id, show_id: currentShow.id, type, note, elapsed_seconds: elapsed});
+  currentShow.entries.sort((a, b) => a.elapsed_seconds - b.elapsed_seconds);
+  renderEntryLists();
+  input.focus();
+}
+
+function renderEntryLists() {
+  ['timestamp', 'clip'].forEach(type => {
+    const el = $(`entries-${type}`);
+    if (!el) return;
+    const entries = (currentShow.entries || []).filter(e => e.type === type);
+    if (entries.length === 0) {
+      el.innerHTML = '<div style="font-size:11px;color:var(--text-dimmer);padding:10px 2px;">Nothing yet</div>';
+      return;
+    }
+    el.innerHTML = entries.map(e => {
+      if (liveEditingEntryId === e.id) {
+        return `
+          <div class="live-entry-row editing">
+            <input type="text" id="edit-time-${e.id}" value="${fmtHMS(e.elapsed_seconds)}" style="width:76px;font-family:var(--mono);font-size:11px;padding:4px 6px;">
+            <input type="text" id="edit-note-${e.id}" value="${esc(e.note)}" style="flex:1;font-size:12px;padding:4px 8px;"
+              onkeydown="if(event.key==='Enter')saveEntryEdit('${e.id}');if(event.key==='Escape'){liveEditingEntryId=null;renderEntryLists();}">
+            <button class="btn-ghost btn-sm" onclick="saveEntryEdit('${e.id}')" style="font-size:10px;padding:3px 8px;">Save</button>
+            <button class="btn-ghost btn-sm" onclick="liveEditingEntryId=null;renderEntryLists()" style="font-size:10px;padding:3px 8px;">&#10005;</button>
+          </div>`;
+      }
+      return `
+        <div class="live-entry-row">
+          <span class="live-entry-time">${fmtHMS(e.elapsed_seconds)}</span>
+          <span class="live-entry-note">${esc(e.note) || '<span style="color:var(--text-dimmer);">(mark)</span>'}</span>
+          <span class="live-entry-actions">
+            <button title="Edit" onclick="liveEditingEntryId='${e.id}';renderEntryLists()">&#9998;</button>
+            <button title="Move to ${type === 'clip' ? 'Timestamps' : 'Potential Clips'}" onclick="switchEntryType('${e.id}')">&#8644;</button>
+            <button title="Delete" onclick="deleteEntry('${e.id}')">&#10005;</button>
+          </span>
+        </div>`;
+    }).join('');
+    // Keep newest visible
+    el.scrollTop = el.scrollHeight;
+  });
+}
+
+async function saveEntryEdit(entryId) {
+  const timeInput = $(`edit-time-${entryId}`);
+  const noteInput = $(`edit-note-${entryId}`);
+  const secs = parseHMS(timeInput.value);
+  if (secs === null) { toast('Time must be mm:ss or h:mm:ss'); return; }
+  const note = noteInput.value.trim();
+  const d = await api('PUT', `/api/show-entries/${entryId}`, {note, elapsed_seconds: secs});
+  if (d.error) { toast(d.error); return; }
+  const entry = currentShow.entries.find(e => e.id === entryId);
+  if (entry) { entry.note = note; entry.elapsed_seconds = secs; }
+  currentShow.entries.sort((a, b) => a.elapsed_seconds - b.elapsed_seconds);
+  liveEditingEntryId = null;
+  renderEntryLists();
+}
+
+async function switchEntryType(entryId) {
+  const entry = currentShow.entries.find(e => e.id === entryId);
+  if (!entry) return;
+  const newType = entry.type === 'clip' ? 'timestamp' : 'clip';
+  const d = await api('PUT', `/api/show-entries/${entryId}`, {type: newType});
+  if (d.error) { toast(d.error); return; }
+  entry.type = newType;
+  renderEntryLists();
+}
+
+async function deleteEntry(entryId) {
+  await api('DELETE', `/api/show-entries/${entryId}`);
+  currentShow.entries = currentShow.entries.filter(e => e.id !== entryId);
+  renderEntryLists();
+}
+
+function renderShowEnded() {
+  stopLiveTimer();
+  const s = currentShow;
+  const clipCount = (s.entries || []).filter(e => e.type === 'clip').length;
+  const tsCount = (s.entries || []).filter(e => e.type === 'timestamp').length;
+  liveClipsFile = '';
+  $('liveContent').innerHTML = `
+    <button class="btn-ghost btn-sm" onclick="currentShow=null; loadLiveTab()" style="margin-bottom:14px;">&larr; All shows</button>
+    <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:16px;flex-wrap:wrap;">
+      <div style="min-width:0;">
+        <div style="font-size:15px;font-weight:600;color:var(--text);">${esc(s.title)}</div>
+        <div style="font-family:var(--mono);font-size:11px;color:var(--text-dim);margin-top:3px;">
+          Ended · ${fmtHMS(showElapsed(s))} · ${tsCount} ts · ${clipCount} clips
+        </div>
+      </div>
+      <button class="btn-ghost btn-sm" onclick="copyShowTimestamps()" style="font-size:11px;">&#128203; Copy Timestamps</button>
+    </div>
+
+    <div class="live-getclips-panel">
+      <div class="section-label" style="margin-bottom:10px;">Get Clips — ${clipCount} potential clip${clipCount === 1 ? '' : 's'}</div>
+      ${clipCount === 0 ? '<div style="font-size:12px;color:var(--text-dimmer);">No Potential Clips entries on this show. Move a timestamp over with &#8644; or add one below.</div>' : `
+      <div style="display:flex;gap:6px;margin-bottom:12px;">
+        <button class="live-source-btn ${liveClipsSource === 'local' ? 'active' : ''}" onclick="setClipsSource('local')">Local recording</button>
+        <button class="live-source-btn ${liveClipsSource === 'url' ? 'active' : ''}" onclick="setClipsSource('url')">YouTube URL</button>
+      </div>
+      <div id="clipsSourceLocal" style="display:${liveClipsSource === 'local' ? 'block' : 'none'};margin-bottom:12px;">
+        <div style="display:flex;gap:8px;align-items:center;">
+          <button class="btn-ghost btn-sm" onclick="pickShowClipsFile()">&#128193; Browse recording</button>
+          <span id="clipsFileStatus" style="font-family:var(--mono);font-size:10px;color:var(--text-dimmer);"></span>
+        </div>
+      </div>
+      <div id="clipsSourceUrl" style="display:${liveClipsSource === 'url' ? 'block' : 'none'};margin-bottom:12px;">
+        <input type="text" id="clipsUrlInput" value="${esc(s.youtube_url || '')}" placeholder="https://www.youtube.com/watch?v=..." style="font-family:var(--mono);font-size:12px;">
+      </div>
+      <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
+        <button class="btn-primary" onclick="getShowClips()" style="padding:12px 28px;font-size:14px;">&#9986; Get Clips</button>
+        <label style="font-family:var(--mono);font-size:10px;color:var(--text-dimmer);display:flex;align-items:center;gap:6px;">
+          offset <input type="number" id="clipsOffsetInput" value="0" step="1" style="width:64px;font-family:var(--mono);font-size:11px;padding:4px 6px;"> sec
+        </label>
+      </div>
+      ${s.generated_session_id ? `<div style="margin-top:10px;font-size:11px;color:var(--yellow);">&#9888; Clips already generated once for this show. <a href="#" onclick="viewGeneratedSession('${s.generated_session_id}'); return false;" style="color:var(--accent);">View session</a> — running again creates a new one.</div>` : ''}
+      `}
+    </div>
+
+    <div class="live-capture-grid" style="margin-top:20px;">
+      ${renderCaptureSection('timestamp', 'Timestamps', 'Add a missed moment (time editable)')}
+      ${renderCaptureSection('clip', 'Potential Clips', 'Add a missed clip moment')}
+    </div>
+    <div class="hint" style="margin-top:8px;">Entries are still editable — new ones are stamped at the show's end time; click &#9998; to set the real time.</div>`;
+  renderEntryLists();
+}
+
+function setClipsSource(src) {
+  liveClipsSource = src;
+  renderShowEnded();
+}
+
+async function pickShowClipsFile() {
+  const d = await api('POST', '/api/snipcut/pick-file');
+  if (d.error) { toast(d.error); return; }
+  if (d.cancelled || !d.path) return;
+  liveClipsFile = d.path;
+  const el = $('clipsFileStatus');
+  if (el) el.textContent = d.path.split('/').pop();
+}
+
+async function getShowClips() {
+  const s = currentShow;
+  const offset = parseInt($('clipsOffsetInput').value) || 0;
+  const body = {source: liveClipsSource, offset_seconds: offset};
+  if (liveClipsSource === 'local') {
+    if (!liveClipsFile) { toast('Browse to your recording first'); return; }
+    body.local_file = liveClipsFile;
+  } else {
+    const url = ($('clipsUrlInput').value || '').trim();
+    if (!url) { toast('Enter the YouTube URL'); return; }
+    body.youtube_url = url;
+  }
+  const d = await api('POST', `/api/shows/${s.id}/get-clips`, body);
+  if (d.error) { toast(d.error); return; }
+  currentShow.generated_session_id = d.session_id;
+  toast(`${d.clip_count} clips started`);
+  currentSessionId = d.session_id;
+  switchView('clips');
+  startPolling(d.session_id);
+  loadSession(d.session_id);
+}
+
+function viewGeneratedSession(sessionId) {
+  currentSessionId = sessionId;
+  switchView('clips');
+  loadSession(sessionId);
+}
+
+function copyShowTimestamps() {
+  const lines = (currentShow.entries || [])
+    .filter(e => e.type === 'timestamp')
+    .map(e => `${fmtHMS(e.elapsed_seconds)} - ${e.note}`.trim());
+  if (lines.length === 0) { toast('No timestamps to copy'); return; }
+  navigator.clipboard.writeText(lines.join('\n'))
+    .then(() => toast(`${lines.length} timestamps copied`))
+    .catch(() => toast('Copy failed'));
 }
 
 // ── SnipCut ──
