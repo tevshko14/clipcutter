@@ -61,6 +61,14 @@ def get_ytdlp_cmd():
         base += ["--js-runtimes", "node", "--remote-components", "ejs:github"]
     return base
 
+# HD-only format chain for every YouTube download. YouTube's pre-muxed
+# progressive MP4s cap at ~360p, so they are deliberately excluded — if no
+# adaptive HD stream is available the download fails loudly instead of
+# silently producing an unusable clip. h264+aac first (merge is a pure
+# remux); any-codec merge as fallback (export re-encodes to h264 anyway).
+YTDLP_HD_FORMAT = ("bestvideo[height<=1080][ext=mp4]+bestaudio[ext=m4a]"
+                   "/bestvideo[height<=1080]+bestaudio")
+
 # Run bootstrap before importing flask/webview
 check_and_install_pip_deps()
 
@@ -276,11 +284,11 @@ def download_clip(clip_id: str, url: str):
         cmd = [
             *get_ytdlp_cmd(),
             "--download-sections", section_arg,
-            # bestvideo+bestaudio FIRST: YouTube's pre-muxed progressive MP4s
-            # cap at ~360p, so preferring them (as we briefly did for speed)
-            # silently tanks quality. The merge is a remux, not a re-encode —
-            # it only costs a few seconds.
-            "-f", "bestvideo[height<=1080][ext=mp4]+bestaudio[ext=m4a]/best[height<=1080][ext=mp4]/best",
+            # HD adaptive streams only. YouTube's pre-muxed progressive MP4s
+            # cap at ~360p — never acceptable — so they are deliberately NOT
+            # in the fallback chain. h264+aac preferred (remux only); any
+            # codec merge second; fail loudly rather than degrade.
+            "-f", YTDLP_HD_FORMAT,
             "--merge-output-format", "mp4",
             "-o", str(output_path),
             "--no-playlist",
@@ -288,27 +296,9 @@ def download_clip(clip_id: str, url: str):
         ]
 
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
-        combined_output = (result.stdout or "") + (result.stderr or "")
         if result.returncode != 0:
-            log.warning("Download failed (rc=%s). Output tail: %s", result.returncode, combined_output[-300:])
-            if "could not open encoder" in combined_output.lower() or "aac" in combined_output.lower():
-                log.warning("Retrying with pre-muxed format (AAC encoder error) — "
-                            "quality may drop to 360p for this clip")
-                # Clean up partial file from failed attempt
-                if output_path.exists():
-                    try: output_path.unlink()
-                    except OSError: pass
-                cmd_retry = [
-                    *get_ytdlp_cmd(),
-                    "--download-sections", section_arg,
-                    "-f", "best[height<=1080][ext=mp4]/best",
-                    "--no-playlist",
-                    "-o", str(output_path),
-                    url,
-                ]
-                result = subprocess.run(cmd_retry, capture_output=True, text=True, timeout=600)
-                if result.returncode != 0:
-                    log.error("Retry also failed: %s%s", (result.stdout or '')[-200:], (result.stderr or '')[-200:])
+            combined_output = (result.stdout or "") + (result.stderr or "")
+            log.error("Download failed (rc=%s). Output tail: %s", result.returncode, combined_output[-300:])
 
         if result.returncode == 0:
             conn.execute(
@@ -578,8 +568,7 @@ def retry_clip(clip_id: str):
         cmd = [
             *ytdlp_cmd,
             "--download-sections", section_arg,
-            # bestvideo+bestaudio first — pre-muxed MP4s cap at ~360p (see download_clip)
-            "-f", "bestvideo[height<=1080][ext=mp4]+bestaudio[ext=m4a]/best[height<=1080][ext=mp4]/best",
+            "-f", YTDLP_HD_FORMAT,
             "--merge-output-format", "mp4",
             "-o", str(output_path),
             "--no-playlist",
@@ -659,8 +648,7 @@ def run_session_downloads(session_id: str):
         cmd = [
             *ytdlp_cmd,
             "--download-sections", section_arg,
-            "--force-keyframes-at-cuts",
-            "-f", "bestvideo[height<=1080][ext=mp4]+bestaudio[ext=m4a]/best[height<=1080][ext=mp4]/best",
+            "-f", YTDLP_HD_FORMAT,
             "--merge-output-format", "mp4",
             "-o", str(output_path),
             "--no-playlist",
