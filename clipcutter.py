@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """
-ClipCutter v2 — AI-powered livestream clip editor.
-Paste timestamps, get transcribed clips with AI sizzle reel suggestions.
+ClipCutter v3 — livestream clip prep.
+Capture timestamps during your show (Live tab), then one click turns the
+Potential Clips into DaVinci-ready CFR files. Convert tab CFR-converts any
+recording. No AI, no editing — extraction and conversion only.
 """
 
 import os
@@ -23,7 +25,7 @@ for _p in ["/opt/homebrew/bin", "/usr/local/bin"]:
 
 def check_and_install_pip_deps():
     """Auto-install Python dependencies on first run."""
-    required = {"flask": "flask", "webview": "pywebview", "anthropic": "anthropic", "requests": "requests"}
+    required = {"flask": "flask", "webview": "pywebview"}
     missing = []
     for import_name, pip_name in required.items():
         try:
@@ -87,181 +89,16 @@ from cc_db import (
 )
 from cc_helpers import (
     sanitize_note, resolve_user_path,
-    parse_timestamp, seconds_to_hms, parse_clip_entries,
+    seconds_to_hms,
 )
 from cc_log import log
 
 app = Flask(__name__)
 
-CLAUDE_HAIKU = "claude-haiku-4-5-20251001"
-CLAUDE_SONNET = "claude-sonnet-4-20250514"
-
-def call_claude(api_key: str, prompt: str, max_tokens: int = 300, model: str = CLAUDE_HAIKU) -> dict:
-    """Call Claude, strip optional code fences, and return parsed JSON."""
-    import anthropic
-    text = anthropic.Anthropic(api_key=api_key).messages.create(
-        model=model,
-        max_tokens=max_tokens,
-        messages=[{"role": "user", "content": prompt}],
-    ).content[0].text.strip()
-    if text.startswith("```"):
-        text = text.split("\n", 1)[1].rsplit("```", 1)[0].strip()
-    return json.loads(text)
-
-# ---------- Phase A: Scan ----------
-
-def parse_json3_captions(data: dict) -> str:
-    """Convert YouTube json3 auto-caption events to a deduplicated timestamped transcript."""
-    segments = []
-    seen = set()
-    for event in data.get("events", []):
-        segs = event.get("segs", [])
-        if not segs:
-            continue
-        text = "".join(s.get("utf8", "") for s in segs).replace("\n", " ").strip()
-        if not text or text in seen:
-            continue
-        seen.add(text)
-        t_s = event.get("tStartMs", 0) / 1000
-        mins, secs = int(t_s // 60), int(t_s % 60)
-        segments.append(f"[{mins}:{secs:02d}] {text}")
-    return "\n".join(segments)
-
-
-def scan_session(session_id: str):
-    """Phase A: download YouTube auto-captions, analyze with Claude, store suggestions."""
-    conn = get_db()
-    try:
-        session = row_to_dict(conn.execute(
-            "SELECT id, youtube_url FROM sessions WHERE id = ?", (session_id,)
-        ).fetchone())
-        if not session:
-            return
-
-        url = session["youtube_url"]
-        config = load_config()
-        api_key = config.get("api_key", "")
-
-        conn.execute("UPDATE sessions SET gather_phase = 'scanning' WHERE id = ?", (session_id,))
-        conn.commit()
-
-        session_dir = SESSIONS_DIR / session_id
-        session_dir.mkdir(parents=True, exist_ok=True)
-        captions_base = session_dir / "captions"
-
-        ytdlp_cmd = get_ytdlp_cmd()
-
-        # Step 1: fetch video title (separate call — --print causes early exit)
-        title_result = subprocess.run(
-            [*ytdlp_cmd, "--print", "title", "--no-playlist", url],
-            capture_output=True, text=True, timeout=30
-        )
-        video_title = title_result.stdout.strip().splitlines()[0] if title_result.stdout.strip() else ""
-
-        conn.execute("UPDATE sessions SET video_title = ? WHERE id = ?", (video_title, session_id))
-        conn.commit()
-
-        # Step 2: download auto-captions (no --print, so yt-dlp actually writes the file)
-        cmd = [
-            *ytdlp_cmd,
-            "--write-auto-subs",
-            "--sub-lang", "en",
-            "--skip-download",
-            "--sub-format", "json3",
-            "-o", str(captions_base),
-            "--no-playlist",
-            url,
-        ]
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
-
-        # Find captions file (yt-dlp appends language code)
-        captions_file = None
-        for suffix in [".en.json3", ".en-US.json3", ".en-GB.json3"]:
-            candidate = Path(str(captions_base) + suffix)
-            if candidate.exists():
-                captions_file = candidate
-                break
-
-        if not captions_file:
-            conn.execute(
-                "UPDATE sessions SET gather_phase = 'no_captions', video_title = ? WHERE id = ?",
-                (video_title, session_id)
-            )
-            conn.commit()
-            return
-
-        with open(captions_file) as f:
-            transcript_text = parse_json3_captions(json.load(f))
-
-        conn.execute(
-            "UPDATE sessions SET stream_captions = ?, video_title = ? WHERE id = ?",
-            (transcript_text, video_title, session_id)
-        )
-        conn.commit()
-
-        # Without API key, skip analysis — user can still add segments manually
-        if not api_key or not transcript_text.strip():
-            conn.execute("UPDATE sessions SET gather_phase = 'selecting' WHERE id = ?", (session_id,))
-            conn.commit()
-            return
-
-        target_duration = config.get("target_duration", 60)
-        prompt = f"""You are a YouTube Shorts editor for a finance content creator's livestream.
-
-Analyze this full livestream transcript and identify the 5-10 strongest moments that would work as standalone YouTube Shorts (~{target_duration - 15}-{target_duration + 15} seconds each).
-
-Look for moments that have:
-- A clear, complete thesis or insight (not mid-thought)
-- Specific data points, numbers, or analysis
-- Natural conviction in the delivery
-- Standalone clarity — a viewer with no context should still follow
-
-FULL LIVESTREAM TRANSCRIPT (timestamps in [MM:SS]):
-{transcript_text[:14000]}
-
-Respond in JSON only, no other text:
-{{"suggestions": [
-  {{
-    "timestamp_seconds": <int — center point in the stream>,
-    "title": "<punchy clip title>",
-    "reasoning": "<1-2 sentences why this moment is clippable>",
-    "confidence": "high" | "medium"
-  }}
-]}}
-
-Order by quality (strongest first). Aim for 5-8 suggestions."""
-
-        suggestions_data = call_claude(api_key, prompt, max_tokens=2000, model=CLAUDE_SONNET)
-
-        for i, s in enumerate(suggestions_data.get("suggestions", [])):
-            conn.execute(
-                """INSERT INTO suggestions
-                   (id, session_id, sort_order, timestamp_seconds, suggested_title, reasoning, confidence)
-                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
-                (uuid.uuid4().hex[:10], session_id, i,
-                 int(s.get("timestamp_seconds", 0)),
-                 s.get("title", ""),
-                 s.get("reasoning", ""),
-                 s.get("confidence", "high"))
-            )
-
-        conn.execute("UPDATE sessions SET gather_phase = 'selecting' WHERE id = ?", (session_id,))
-        conn.commit()
-
-    except Exception as e:
-        conn.execute(
-            "UPDATE sessions SET gather_phase = 'error', video_title = ? WHERE id = ?",
-            (f"Scan failed: {str(e)[:200]}", session_id)
-        )
-        conn.commit()
-    finally:
-        conn.close()
-
-
-# ---------- Phase B: Collect ----------
+# ---------- Clip Workers ----------
 
 def download_clip(clip_id: str, url: str):
-    """Download one clip segment and chain to transcription. Runs in its own thread."""
+    """Download one clip segment from YouTube, then auto-export. Runs in a thread."""
     conn = get_db()
     try:
         clip = row_to_dict(conn.execute(
@@ -307,6 +144,7 @@ def download_clip(clip_id: str, url: str):
             )
             conn.commit()
             conn.close()
+            _finish_clip(clip_id, clip["session_id"])
         else:
             error_msg = result.stderr[-400:] if result.stderr else "Download failed"
             conn.execute(
@@ -334,8 +172,8 @@ def download_clip(clip_id: str, url: str):
 
 
 def extract_clip_local(clip_id: str, source_path: str):
-    """Extract a clip segment from a local video file using ffmpeg -c copy.
-    Instant (no re-encoding). Chains to transcription on success."""
+    """Extract a clip segment from a local video file using ffmpeg -c copy
+    (instant, lossless), then auto-export. Runs in a thread."""
     conn = get_db()
     try:
         clip = row_to_dict(conn.execute(
@@ -372,6 +210,7 @@ def extract_clip_local(clip_id: str, source_path: str):
             )
             conn.commit()
             conn.close()
+            _finish_clip(clip_id, clip["session_id"])
         else:
             error_msg = (result.stderr or "ffmpeg extraction failed")[-300:]
             conn.execute(
@@ -389,57 +228,6 @@ def extract_clip_local(clip_id: str, source_path: str):
             conn.commit()
         finally:
             conn.close()
-
-
-def gather_session(session_id: str):
-    """Phase B: create clip records from selected suggestions, start parallel downloads."""
-    conn = get_db()
-    url = None
-    clip_ids = []
-    try:
-        session = row_to_dict(conn.execute(
-            "SELECT id, youtube_url FROM sessions WHERE id = ?", (session_id,)
-        ).fetchone())
-        if not session:
-            return
-
-        url = session["youtube_url"]
-        config = load_config()
-        default_window = config.get("default_clip_window", 5) * 60
-
-        suggestions = rows_to_list(conn.execute(
-            "SELECT * FROM suggestions WHERE session_id = ? AND selected = 1 ORDER BY sort_order",
-            (session_id,)
-        ).fetchall())
-
-        if not suggestions:
-            return
-
-        for s in suggestions:
-            clip_id = uuid.uuid4().hex[:10]
-            window = s.get("window_seconds") or default_window
-            half = window // 2
-            start = max(0, s["timestamp_seconds"] - half)
-            end = s["timestamp_seconds"] + half
-            note = s["suggested_title"] or s["note"] or "clip"
-            conn.execute(
-                """INSERT INTO clips
-                   (id, session_id, suggestion_id, note, center_seconds,
-                    window_seconds, start_seconds, end_seconds, status)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'queued')""",
-                (clip_id, session_id, s["id"], note,
-                 s["timestamp_seconds"], window, start, end)
-            )
-            clip_ids.append(clip_id)
-
-        conn.execute("UPDATE sessions SET gather_phase = 'collecting' WHERE id = ?", (session_id,))
-        conn.commit()
-    finally:
-        conn.close()
-
-    # Parallel downloads — one thread per clip
-    for clip_id in clip_ids:
-        threading.Thread(target=download_clip, args=(clip_id, url), daemon=True).start()
 
 
 # ---------- Export ----------
@@ -493,13 +281,13 @@ def export_clip(clip_id: str):
             error_msg = result.stderr[-500:] if result.stderr else "ffmpeg export failed"
             log.error("Export failed: %s", error_msg)
             conn.execute(
-                "UPDATE clips SET status = 'ready', error_text = ? WHERE id = ?",
+                "UPDATE clips SET status = 'error', error_text = ? WHERE id = ?",
                 (f"Export failed: {error_msg[:400]}", clip_id)
             )
         conn.commit()
     except Exception as e:
         conn.execute(
-            "UPDATE clips SET status = 'ready', error_text = ? WHERE id = ?",
+            "UPDATE clips SET status = 'error', error_text = ? WHERE id = ?",
             (f"Export failed: {str(e)[:400]}", clip_id)
         )
         conn.commit()
@@ -507,21 +295,43 @@ def export_clip(clip_id: str):
         conn.close()
 
 
-def export_all_clips(session_id: str):
-    """Export all ready clips in a session sequentially."""
+def _finish_clip(clip_id: str, session_id: str):
+    """Auto-export a downloaded/extracted clip to CFR MP4, then — if it was
+    the last one in the session — open the output folder in Finder.
+    One click on Get Clips ends with files on disk, no further steps."""
+    export_clip(clip_id)
+
     with with_db() as conn:
-        clips = rows_to_list(conn.execute(
-            "SELECT id FROM clips WHERE session_id = ? AND status = 'ready'",
+        remaining = conn.execute(
+            "SELECT COUNT(*) FROM clips WHERE session_id = ? "
+            "AND status NOT IN ('exported', 'error')",
             (session_id,)
-        ).fetchall())
-    for clip in clips:
-        export_clip(clip["id"])
+        ).fetchone()[0]
+        if remaining > 0:
+            return
+        # Atomically claim the 'session finished' event so simultaneous
+        # last-clip finishers don't open the folder twice.
+        cur = conn.execute(
+            "UPDATE sessions SET gather_phase = 'done' WHERE id = ? AND gather_phase != 'done'",
+            (session_id,)
+        )
+        conn.commit()
+        claimed = cur.rowcount > 0
+
+    if claimed:
+        out_dir = get_session_output_dir(session_id)
+        log.info("Session %s complete — opening %s", session_id, out_dir)
+        if sys.platform == "darwin":
+            subprocess.Popen(["open", str(out_dir)])
 
 
 # ---------- Retry ----------
 
 def retry_clip(clip_id: str):
-    """Re-download a failed clip (skips if raw_file still exists)."""
+    """Re-attempt a failed clip: re-download if the raw file is gone, then
+    auto-export. Re-arms the session-finished event so the folder opens
+    again when the retry completes the set."""
+    downloaded = False
     conn = get_db()
     try:
         clip = row_to_dict(conn.execute(
@@ -531,70 +341,77 @@ def retry_clip(clip_id: str):
         if not clip:
             return
 
-        raw_exists = clip["raw_file"] and Path(clip["raw_file"]).exists()
+        conn.execute(
+            "UPDATE sessions SET gather_phase = 'collecting' WHERE id = ?",
+            (clip["session_id"],)
+        )
+        conn.commit()
 
-        if raw_exists:
+        if clip["raw_file"] and Path(clip["raw_file"]).exists():
             conn.execute(
                 "UPDATE clips SET status = 'ready', error_text = '' WHERE id = ?",
                 (clip_id,)
             )
             conn.commit()
-            return
-
-        # Need to re-download
-        conn.execute(
-            "UPDATE clips SET status = 'downloading', error_text = '' WHERE id = ?",
-            (clip_id,)
-        )
-        conn.commit()
-
-        session = row_to_dict(conn.execute(
-            "SELECT youtube_url FROM sessions WHERE id = ?",
-            (clip["session_id"],)
-        ).fetchone())
-        if not session:
-            return
-
-        session_dir = SESSIONS_DIR / clip["session_id"] / "raw"
-        session_dir.mkdir(parents=True, exist_ok=True)
-
-        start_hms = seconds_to_hms(clip["start_seconds"])
-        end_hms = seconds_to_hms(clip["end_seconds"])
-        safe_note = sanitize_note(clip["note"] or "clip")
-        output_path = session_dir / f"{safe_note}_{clip_id[:6]}.mp4"
-        section_arg = f"*{start_hms}-{end_hms}"
-
-        ytdlp_cmd = get_ytdlp_cmd()
-        cmd = [
-            *ytdlp_cmd,
-            "--download-sections", section_arg,
-            "-f", YTDLP_HD_FORMAT,
-            "--merge-output-format", "mp4",
-            "-o", str(output_path),
-            "--no-playlist",
-            session["youtube_url"],
-        ]
-
-        try:
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
-            if result.returncode == 0:
-                conn.execute(
-                    "UPDATE clips SET status = 'ready', raw_file = ? WHERE id = ?",
-                    (str(output_path), clip_id)
-                )
-            else:
-                error_msg = result.stderr[-500:] if result.stderr else "Download failed"
-                conn.execute(
-                    "UPDATE clips SET status = 'error', error_text = ? WHERE id = ?",
-                    (error_msg, clip_id)
-                )
-            conn.commit()
-        except (subprocess.TimeoutExpired, FileNotFoundError) as e:
+            downloaded = True
+        else:
             conn.execute(
-                "UPDATE clips SET status = 'error', error_text = ? WHERE id = ?",
-                (str(e)[:400], clip_id)
+                "UPDATE clips SET status = 'downloading', error_text = '' WHERE id = ?",
+                (clip_id,)
             )
             conn.commit()
+
+            session = row_to_dict(conn.execute(
+                "SELECT youtube_url FROM sessions WHERE id = ?",
+                (clip["session_id"],)
+            ).fetchone())
+            if not session or not session["youtube_url"]:
+                conn.execute(
+                    "UPDATE clips SET status = 'error', error_text = 'No YouTube URL to re-download from' WHERE id = ?",
+                    (clip_id,)
+                )
+                conn.commit()
+                return
+
+            session_dir = SESSIONS_DIR / clip["session_id"] / "raw"
+            session_dir.mkdir(parents=True, exist_ok=True)
+
+            safe_note = sanitize_note(clip["note"] or "clip")
+            output_path = session_dir / f"{safe_note}_{clip_id[:6]}.mp4"
+            section_arg = f"*{seconds_to_hms(clip['start_seconds'])}-{seconds_to_hms(clip['end_seconds'])}"
+
+            cmd = [
+                *get_ytdlp_cmd(),
+                "--download-sections", section_arg,
+                "-f", YTDLP_HD_FORMAT,
+                "--merge-output-format", "mp4",
+                "-o", str(output_path),
+                "--no-playlist",
+                session["youtube_url"],
+            ]
+
+            try:
+                result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+                if result.returncode == 0:
+                    conn.execute(
+                        "UPDATE clips SET status = 'ready', raw_file = ? WHERE id = ?",
+                        (str(output_path), clip_id)
+                    )
+                    conn.commit()
+                    downloaded = True
+                else:
+                    error_msg = result.stderr[-500:] if result.stderr else "Download failed"
+                    conn.execute(
+                        "UPDATE clips SET status = 'error', error_text = ? WHERE id = ?",
+                        (error_msg, clip_id)
+                    )
+                    conn.commit()
+            except (subprocess.TimeoutExpired, FileNotFoundError) as e:
+                conn.execute(
+                    "UPDATE clips SET status = 'error', error_text = ? WHERE id = ?",
+                    (str(e)[:400], clip_id)
+                )
+                conn.commit()
     except Exception as e:
         try:
             conn.execute(
@@ -610,75 +427,8 @@ def retry_clip(clip_id: str):
         except Exception:
             pass
 
-# ---------- Download Worker ----------
-
-def run_session_downloads(session_id: str):
-    """Download all clips for a session, updating DB status as we go."""
-    conn = get_db()
-    session = row_to_dict(conn.execute("SELECT * FROM sessions WHERE id = ?", (session_id,)).fetchone())
-    if not session:
-        conn.close()
-        return
-
-    clips = rows_to_list(conn.execute(
-        "SELECT * FROM clips WHERE session_id = ? ORDER BY center_seconds",
-        (session_id,)
-    ).fetchall())
-
-    session_dir = SESSIONS_DIR / session_id / "raw"
-    session_dir.mkdir(parents=True, exist_ok=True)
-
-    ytdlp_cmd = get_ytdlp_cmd()
-    url = session["youtube_url"]
-
-    for clip in clips:
-        clip_id = clip["id"]
-
-        # Update status to downloading
-        conn.execute("UPDATE clips SET status = 'downloading' WHERE id = ?", (clip_id,))
-        conn.commit()
-
-        start_hms = seconds_to_hms(clip["start_seconds"])
-        end_hms = seconds_to_hms(clip["end_seconds"])
-        safe_note = sanitize_note(clip["note"])
-        filename = f"{safe_note}_{clip_id[:6]}.mp4"
-        output_path = session_dir / filename
-        section_arg = f"*{start_hms}-{end_hms}"
-
-        cmd = [
-            *ytdlp_cmd,
-            "--download-sections", section_arg,
-            "-f", YTDLP_HD_FORMAT,
-            "--merge-output-format", "mp4",
-            "-o", str(output_path),
-            "--no-playlist",
-            url,
-        ]
-
-        try:
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
-            if result.returncode == 0:
-                conn.execute(
-                    "UPDATE clips SET status = 'ready', raw_file = ? WHERE id = ?",
-                    (str(output_path), clip_id)
-                )
-                conn.commit()
-                continue
-            else:
-                error_msg = result.stderr[-500:] if result.stderr else "Unknown error"
-                conn.execute(
-                    "UPDATE clips SET status = 'error', error_text = ? WHERE id = ?",
-                    (error_msg, clip_id)
-                )
-        except subprocess.TimeoutExpired:
-            conn.execute("UPDATE clips SET status = 'error', error_text = 'Timed out (10 min)' WHERE id = ?", (clip_id,))
-        except FileNotFoundError:
-            conn.execute("UPDATE clips SET status = 'error', error_text = 'yt-dlp not found' WHERE id = ?", (clip_id,))
-
-        conn.commit()
-
-    conn.close()
-
+    if downloaded and clip:
+        _finish_clip(clip_id, clip["session_id"])
 
 # ---------- SnipCut: AI-Assisted Rough Cut Pipeline ----------
 
@@ -824,21 +574,14 @@ def api_check():
 @app.route("/api/config", methods=["GET"])
 def api_get_config():
     config = load_config()
-    if config.get("api_key"):
-        key = config["api_key"]
-        config["api_key_preview"] = key[:8] + "..." + key[-4:] if len(key) > 12 else "***"
-        config["has_api_key"] = True
-    else:
-        config["api_key_preview"] = ""
-        config["has_api_key"] = False
-    del config["api_key"]
+    config.pop("api_key", None)  # legacy key may linger in old config files
     return jsonify(config)
 
 @app.route("/api/config", methods=["PUT"])
 def api_update_config():
     config = load_config()
     data = request.json
-    for key in ["api_key", "default_clip_window", "target_duration", "output_dir", "channel_profile", "streambuddy_url", "streambuddy_token"]:
+    for key in ["default_clip_window", "output_dir"]:
         if key in data:
             config[key] = data[key]
     save_config(config)
@@ -846,16 +589,17 @@ def api_update_config():
 
 # -- Sessions --
 
-def _create_clip_session(url: str, local_file: str, clip_specs: list) -> str:
+def _create_clip_session(url: str, local_file: str, clip_specs: list, title: str = "") -> str:
     """Create a session + clips and kick off workers. Returns session_id.
     clip_specs: [{note, center, duration}] — start/end derived from center±half.
-    Source: local ffmpeg extraction when local_file is set, else yt-dlp from url."""
+    Source: local ffmpeg extraction when local_file is set, else yt-dlp from url.
+    title names the output folder (YYYY-MM-DD_Title)."""
     session_id = uuid.uuid4().hex[:12]
     conn = get_db()
     try:
         conn.execute(
-            "INSERT INTO sessions (id, youtube_url, gather_phase) VALUES (?, ?, 'collecting')",
-            (session_id, url or "")
+            "INSERT INTO sessions (id, youtube_url, video_title, gather_phase) VALUES (?, ?, ?, 'collecting')",
+            (session_id, url or "", title or "")
         )
         clip_ids = []
         for spec in clip_specs:
@@ -883,54 +627,6 @@ def _create_clip_session(url: str, local_file: str, clip_specs: list) -> str:
             threading.Thread(target=download_clip, args=(clip_id, url), daemon=True).start()
     return session_id
 
-
-@app.route("/api/sessions", methods=["POST"])
-def api_create_session():
-    data = request.json
-    url = data.get("url", "").strip()
-    text = data.get("text", "").strip()
-    raw_local = data.get("local_file", "")
-
-    if not url and not raw_local:
-        return jsonify({"error": "YouTube URL or local file required"}), 400
-
-    local_file = ""
-    if raw_local:
-        try:
-            local_file = str(resolve_user_path(raw_local))
-        except FileNotFoundError as e:
-            return jsonify({"error": f"File not found: {e}"}), 400
-
-    config = load_config()
-    default_duration = config.get("default_clip_window", 5) * 60
-
-    # If timestamps are provided, skip Phase A scan — go straight to clips
-    if text:
-        parsed = parse_clip_entries(text, default_duration)
-        if not parsed:
-            return jsonify({"error": "No valid timestamps found"}), 400
-
-        session_id = _create_clip_session(url, local_file, [
-            {"note": c["note"], "center": c["center"], "duration": c["duration"]}
-            for c in parsed
-        ])
-        mode = "local" if local_file else "direct"
-        return jsonify({"session_id": session_id, "clip_count": len(parsed), "mode": mode})
-
-    # No timestamps — do Phase A scan
-    session_id = uuid.uuid4().hex[:12]
-    conn = get_db()
-    try:
-        conn.execute(
-            "INSERT INTO sessions (id, youtube_url, gather_phase) VALUES (?, ?, 'scanning')",
-            (session_id, url)
-        )
-        conn.commit()
-    finally:
-        conn.close()
-
-    threading.Thread(target=scan_session, args=(session_id,), daemon=True).start()
-    return jsonify({"session_id": session_id, "mode": "scan"})
 
 @app.route("/api/sessions", methods=["GET"])
 def api_list_sessions():
@@ -1053,20 +749,6 @@ def api_clip_video(clip_id):
     except OSError:
         return jsonify({"error": "Video file not found"}), 404
 
-@app.route("/api/clips/<clip_id>/export", methods=["POST"])
-def api_export_clip(clip_id):
-    with with_db() as conn:
-        clip = row_to_dict(conn.execute("SELECT id FROM clips WHERE id = ?", (clip_id,)).fetchone())
-    if not clip:
-        return jsonify({"error": "Clip not found"}), 404
-    threading.Thread(target=export_clip, args=(clip_id,), daemon=True).start()
-    return jsonify({"ok": True, "message": "Export started"})
-
-@app.route("/api/sessions/<session_id>/export-all", methods=["POST"])
-def api_export_all(session_id):
-    threading.Thread(target=export_all_clips, args=(session_id,), daemon=True).start()
-    return jsonify({"ok": True, "message": "Batch export started"})
-
 @app.route("/api/clips/<clip_id>/retry", methods=["POST"])
 def api_retry_clip(clip_id):
     conn = get_db()
@@ -1079,120 +761,6 @@ def api_retry_clip(clip_id):
     thread = threading.Thread(target=retry_clip, args=(clip_id,), daemon=True)
     thread.start()
     return jsonify({"ok": True, "message": "Retry started"})
-
-@app.route("/api/sessions/<session_id>/scan-status")
-def api_scan_status(session_id):
-    conn = get_db()
-    try:
-        row = conn.execute(
-            "SELECT gather_phase, video_title FROM sessions WHERE id = ?", (session_id,)
-        ).fetchone()
-    finally:
-        conn.close()
-    if not row:
-        return jsonify({"error": "Session not found"}), 404
-    return jsonify(dict(row))
-
-@app.route("/api/sessions/<session_id>/suggestions")
-def api_get_suggestions(session_id):
-    conn = get_db()
-    try:
-        rows = rows_to_list(conn.execute(
-            "SELECT * FROM suggestions WHERE session_id = ? ORDER BY sort_order",
-            (session_id,)
-        ).fetchall())
-    finally:
-        conn.close()
-    return jsonify({"suggestions": rows})
-
-@app.route("/api/suggestions/<suggestion_id>", methods=["PUT"])
-def api_update_suggestion(suggestion_id):
-    data = request.json or {}
-    if "selected" not in data:
-        return jsonify({"error": "selected field required"}), 400
-    conn = get_db()
-    try:
-        conn.execute(
-            "UPDATE suggestions SET selected = ? WHERE id = ?",
-            (1 if data["selected"] else 0, suggestion_id)
-        )
-        conn.commit()
-    finally:
-        conn.close()
-    return jsonify({"ok": True})
-
-@app.route("/api/sessions/<session_id>/add-segment", methods=["POST"])
-def api_add_segment(session_id):
-    data = request.json or {}
-    timestamp_raw = data.get("timestamp", "").strip()
-    note = data.get("note", "").strip() or "clip"
-    window = int(data.get("window_seconds", 300))
-
-    try:
-        ts = parse_timestamp(timestamp_raw)
-    except ValueError as e:
-        return jsonify({"error": str(e)}), 400
-
-    conn = get_db()
-    try:
-        max_order = conn.execute(
-            "SELECT COALESCE(MAX(sort_order), -1) FROM suggestions WHERE session_id = ?",
-            (session_id,)
-        ).fetchone()[0]
-        suggestion_id = uuid.uuid4().hex[:10]
-        conn.execute(
-            """INSERT INTO suggestions
-               (id, session_id, sort_order, timestamp_seconds, suggested_title,
-                source, note, window_seconds, selected)
-               VALUES (?, ?, ?, ?, ?, 'manual', ?, ?, 1)""",
-            (suggestion_id, session_id, max_order + 1, ts, note, note, window)
-        )
-        conn.commit()
-        row = row_to_dict(conn.execute(
-            "SELECT * FROM suggestions WHERE id = ?", (suggestion_id,)
-        ).fetchone())
-    finally:
-        conn.close()
-    return jsonify({"ok": True, "suggestion": row})
-
-@app.route("/api/sessions/<session_id>/segments/<suggestion_id>", methods=["DELETE"])
-def api_delete_segment(session_id, suggestion_id):
-    conn = get_db()
-    try:
-        conn.execute(
-            "DELETE FROM suggestions WHERE id = ? AND session_id = ?",
-            (suggestion_id, session_id)
-        )
-        conn.commit()
-    finally:
-        conn.close()
-    return jsonify({"ok": True})
-
-@app.route("/api/sessions/<session_id>/gather", methods=["POST"])
-def api_gather_session(session_id):
-    conn = get_db()
-    try:
-        exists = conn.execute("SELECT id FROM sessions WHERE id = ?", (session_id,)).fetchone()
-    finally:
-        conn.close()
-    if not exists:
-        return jsonify({"error": "Session not found"}), 404
-    threading.Thread(target=gather_session, args=(session_id,), daemon=True).start()
-    return jsonify({"ok": True})
-
-@app.route("/api/clips/<clip_id>/copy", methods=["PUT"])
-def api_save_copy(clip_id):
-    data = request.json or {}
-    conn = get_db()
-    try:
-        conn.execute(
-            "UPDATE clips SET generated_title = ?, generated_description = ? WHERE id = ?",
-            (data.get("title", ""), data.get("description", ""), clip_id)
-        )
-        conn.commit()
-    finally:
-        conn.close()
-    return jsonify({"ok": True})
 
 @app.route("/api/clips/<clip_id>", methods=["DELETE"])
 def api_delete_clip(clip_id):
@@ -1240,19 +808,14 @@ def api_delete_session(session_id):
         shutil.rmtree(session_dir, ignore_errors=True)
     return jsonify({"ok": True})
 
-@app.route("/api/parse", methods=["POST"])
-def api_parse():
-    data = request.json
-    text = data.get("text", "")
-    default_duration = int(data.get("default_duration", 5)) * 60
-    clips = parse_clip_entries(text, default_duration)
-    return jsonify({"clips": clips})
-
 @app.route("/api/open-folder", methods=["POST"])
 def api_open_folder():
     data = request.json
-    # Support both direct path and session_id
-    if data.get("session_id"):
+    # export_session_id -> the session's named export folder;
+    # session_id -> its raw downloads; path -> explicit; default OUTPUT_DIR
+    if data.get("export_session_id"):
+        folder = str(get_session_output_dir(data["export_session_id"]))
+    elif data.get("session_id"):
         folder = str(SESSIONS_DIR / data["session_id"] / "raw")
     else:
         folder = data.get("path", str(OUTPUT_DIR))
@@ -1262,22 +825,6 @@ def api_open_folder():
         subprocess.Popen(["explorer", folder])
     else:
         subprocess.Popen(["xdg-open", folder])
-    return jsonify({"ok": True})
-
-
-@app.route("/api/open-url", methods=["POST"])
-def api_open_url():
-    """Open an external URL in the user's default browser."""
-    data = request.json or {}
-    url = (data.get("url") or "").strip()
-    if not url.startswith(("http://", "https://")):
-        return jsonify({"error": "http(s) URL required"}), 400
-    if sys.platform == "darwin":
-        subprocess.Popen(["open", url])
-    elif sys.platform == "win32":
-        subprocess.Popen(["cmd", "/c", "start", url], shell=False)
-    else:
-        subprocess.Popen(["xdg-open", url])
     return jsonify({"ok": True})
 
 
@@ -1520,7 +1067,7 @@ def api_show_get_clips(show_id):
         {"note": e["note"] or "clip", "center": e["elapsed_seconds"] + offset,
          "duration": default_duration}
         for e in clip_entries
-    ])
+    ], title=show["title"])
 
     with with_db() as conn:
         conn.execute("UPDATE shows SET generated_session_id = ?, youtube_url = ? WHERE id = ?",
@@ -1675,121 +1222,11 @@ def api_snipcut_pending_file():
     return jsonify({"path": None})
 
 
-@app.route("/api/pending-session")
-def api_pending_session():
-    """Return a pending session from clipcutter:// URL scheme (StreamBuddy handoff)."""
-    if _pending_session.get("youtube_url") and not _pending_session.get("consumed"):
-        payload = {
-            "youtube_url": _pending_session["youtube_url"],
-            "timestamps": _pending_session.get("timestamps", ""),
-            "title": _pending_session.get("title", ""),
-        }
-        _pending_session["consumed"] = True
-        return jsonify(payload)
-    return jsonify({"youtube_url": None})
-
-
-@app.route("/api/fetch-from-streambuddy", methods=["POST"])
-def api_fetch_from_streambuddy():
-    """Fetch the most recent ended session from StreamBuddy."""
-    data = request.json or {}
-    base_url = (data.get("base_url") or "").strip().rstrip("/")
-    token = (data.get("token") or "").strip()
-    if not base_url:
-        return jsonify({"error": "StreamBuddy URL not configured in Settings"}), 400
-    if not base_url.startswith(("http://", "https://")):
-        base_url = "https://" + base_url
-    endpoint = f"{base_url}/api/sessions/recent"
-    try:
-        import requests as _rq
-        headers = {"X-ClipCutter-Token": token} if token else {}
-        r = _rq.get(endpoint, headers=headers, timeout=10)
-        # Detect HTML responses (404 pages, error pages) instead of JSON
-        content_type = r.headers.get("content-type", "")
-        if "application/json" not in content_type:
-            msg = f"{endpoint} returned {r.status_code} ({content_type or 'no content-type'})."
-            if r.status_code == 404:
-                msg += " Endpoint not deployed yet — wait for Railway to redeploy or verify the URL."
-            return jsonify({"error": msg}), 502
-        if r.status_code != 200:
-            return jsonify({"error": f"StreamBuddy returned {r.status_code}: {r.text[:200]}"}), 502
-        return jsonify(r.json())
-    except Exception as e:
-        return jsonify({"error": f"Fetch failed for {endpoint}: {e}"}), 502
-
-
-
 # ---------- Entry Point ----------
 
 
 # Pending file from "Open With → ClipCutter" (or drag-drop onto .app)
 _pending_file = {"path": None, "consumed": False}
-
-# Pending session from clipcutter:// URL scheme (StreamBuddy integration)
-_pending_session = {"youtube_url": None, "timestamps": None, "title": None, "consumed": False}
-
-
-# Realistic clipcutter:// URLs (url + base64-encoded timestamps + title)
-# run ~2-5KB for dozens of shorts. 32KB leaves comfortable headroom while
-# still cutting off garbage/hostile payloads before we decode them.
-_CLIPCUTTER_URL_MAX_LEN = 32 * 1024
-_CLIPCUTTER_TS_MAX_LEN = 24 * 1024
-_CLIPCUTTER_TITLE_MAX_LEN = 500
-_CLIPCUTTER_YT_MAX_LEN = 2048
-
-
-def _parse_clipcutter_url(url: str) -> dict:
-    """Parse a clipcutter:// URL into a session payload.
-    Expected formats:
-      clipcutter://session?url=<youtube>&timestamps=<base64_json>&title=<t>
-      clipcutter://session?url=<youtube>&timestamps=<urlencoded_plain_text>
-    """
-    from urllib.parse import urlparse, parse_qs, unquote
-    import base64
-
-    # Size cap guards against accidental or hostile giant payloads that
-    # would hang base64 decoding or json parsing before validation.
-    if len(url) > _CLIPCUTTER_URL_MAX_LEN:
-        log.warning("clipcutter:// URL exceeds %d bytes, ignoring", _CLIPCUTTER_URL_MAX_LEN)
-        return {}
-
-    try:
-        parsed = urlparse(url)
-        if parsed.scheme != "clipcutter":
-            return {}
-        qs = parse_qs(parsed.query)
-        yt = (qs.get("url") or [""])[0][:_CLIPCUTTER_YT_MAX_LEN]
-        title = (qs.get("title") or [""])[0][:_CLIPCUTTER_TITLE_MAX_LEN]
-        ts_raw = (qs.get("timestamps") or [""])[0][:_CLIPCUTTER_TS_MAX_LEN]
-        timestamps = ""
-        if ts_raw:
-            # Try base64 JSON first, fall back to plain text
-            try:
-                decoded = base64.b64decode(ts_raw).decode("utf-8")
-                # If it parses as JSON, format each entry as "H:MM:SS - note"
-                try:
-                    data = json.loads(decoded)
-                    if isinstance(data, list):
-                        lines = []
-                        for item in data:
-                            secs = int(item.get("elapsed_seconds", 0))
-                            h = secs // 3600
-                            m = (secs % 3600) // 60
-                            s = secs % 60
-                            tc = f"{h}:{m:02d}:{s:02d}" if h else f"{m}:{s:02d}"
-                            note = item.get("note", "")
-                            lines.append(f"{tc} - {note}" if note else tc)
-                        timestamps = "\n".join(lines)
-                    else:
-                        timestamps = decoded
-                except json.JSONDecodeError:
-                    timestamps = decoded
-            except Exception:
-                timestamps = unquote(ts_raw)
-        return {"youtube_url": yt, "timestamps": timestamps, "title": title}
-    except Exception as e:
-        log.error("URL parse error: %s", e)
-        return {}
 
 
 def start_server():
@@ -1805,16 +1242,10 @@ def main():
     if not CONFIG_PATH.exists():
         save_config(DEFAULT_CONFIG)
 
-    # Check for file or URL scheme passed via sys.argv
+    # Check for file passed via sys.argv (right-click "Open With")
     if len(sys.argv) > 1:
         candidate = sys.argv[1]
-        if candidate.startswith("clipcutter://"):
-            session = _parse_clipcutter_url(candidate)
-            if session.get("youtube_url"):
-                _pending_session.update(session)
-                _pending_session["consumed"] = False
-                log.info("Queued StreamBuddy session: %s", session.get('title') or session['youtube_url'])
-        elif os.path.isfile(candidate) and candidate.lower().endswith(SUPPORTED_VIDEO_EXTS):
+        if os.path.isfile(candidate) and candidate.lower().endswith(SUPPORTED_VIDEO_EXTS):
             _pending_file["path"] = os.path.abspath(candidate)
             log.info("Queued for SnipCut: %s", Path(candidate).name)
 

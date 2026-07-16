@@ -28,13 +28,8 @@ SUPPORTED_VIDEO_EXTS = (".mp4", ".mkv", ".mov", ".webm", ".avi",
 # ---------- User config ----------
 
 DEFAULT_CONFIG = {
-    "api_key": "",
     "default_clip_window": 5,
-    "target_duration": 60,
     "output_dir": str(OUTPUT_DIR),
-    "channel_profile": "",
-    "streambuddy_url": "",
-    "streambuddy_token": "",
 }
 
 

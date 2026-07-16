@@ -66,7 +66,7 @@ if [ ! -f "$VENV_DIR/bin/python" ]; then
     $PYTHON -m venv "$VENV_DIR"
 fi
 "$VENV_DIR/bin/pip" install --upgrade pip -q
-"$VENV_DIR/bin/pip" install flask pywebview yt-dlp anthropic requests -q
+"$VENV_DIR/bin/pip" install flask pywebview yt-dlp -q
 echo "       ✓ All packages installed"
 
 echo "  [5/5] Building ClipCutter.app..."
@@ -105,7 +105,7 @@ if [ -d "$REPO_DIR/.git" ]; then
 fi
 
 # Ensure deps
-"$VENV/bin/pip" install -q flask pywebview yt-dlp anthropic requests 2>/dev/null
+"$VENV/bin/pip" install -q flask pywebview yt-dlp 2>/dev/null
 
 cd "$INSTALL_DIR"
 # Forward "$@" so right-click "Open With ClipCutter" passes the file path through
@@ -147,17 +147,6 @@ cat > "$APP_PATH/Contents/Info.plist" << PLIST
         </array>
         <key>LSHandlerRank</key>
         <string>Alternate</string>
-      </dict>
-    </array>
-    <key>CFBundleURLTypes</key>
-    <array>
-      <dict>
-        <key>CFBundleURLName</key>
-        <string>ClipCutter Session</string>
-        <key>CFBundleURLSchemes</key>
-        <array>
-          <string>clipcutter</string>
-        </array>
       </dict>
     </array>
 </dict>
