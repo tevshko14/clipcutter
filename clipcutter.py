@@ -276,9 +276,11 @@ def download_clip(clip_id: str, url: str):
         cmd = [
             *get_ytdlp_cmd(),
             "--download-sections", section_arg,
-            # Prefer single pre-muxed MP4 (no merge step = faster).
-            # Falls back to separate streams + merge if pre-muxed unavailable.
-            "-f", "best[height<=1080][ext=mp4]/bestvideo[height<=1080][ext=mp4]+bestaudio[ext=m4a]/best",
+            # bestvideo+bestaudio FIRST: YouTube's pre-muxed progressive MP4s
+            # cap at ~360p, so preferring them (as we briefly did for speed)
+            # silently tanks quality. The merge is a remux, not a re-encode —
+            # it only costs a few seconds.
+            "-f", "bestvideo[height<=1080][ext=mp4]+bestaudio[ext=m4a]/best[height<=1080][ext=mp4]/best",
             "--merge-output-format", "mp4",
             "-o", str(output_path),
             "--no-playlist",
@@ -290,7 +292,8 @@ def download_clip(clip_id: str, url: str):
         if result.returncode != 0:
             log.warning("Download failed (rc=%s). Output tail: %s", result.returncode, combined_output[-300:])
             if "could not open encoder" in combined_output.lower() or "aac" in combined_output.lower():
-                log.info("Retrying download: single-format, no keyframe forcing (AAC encoder error)")
+                log.warning("Retrying with pre-muxed format (AAC encoder error) — "
+                            "quality may drop to 360p for this clip")
                 # Clean up partial file from failed attempt
                 if output_path.exists():
                     try: output_path.unlink()
@@ -479,7 +482,10 @@ def export_clip(clip_id: str):
         cmd = [
             "ffmpeg", "-y",
             "-i", clip["raw_file"],
-            "-c:v", "libx264", "-preset", "fast", "-crf", "20",
+            # CRF 17: this export is a second encode generation (raw clip is
+            # already compressed) and feeds DaVinci -> OpusClip -> YouTube,
+            # each adding its own generation. Keep this one near-transparent.
+            "-c:v", "libx264", "-preset", "fast", "-crf", "17",
             "-r", "30",
             "-c:a", "aac", "-b:a", "192k",
             "-movflags", "+faststart",
@@ -572,7 +578,8 @@ def retry_clip(clip_id: str):
         cmd = [
             *ytdlp_cmd,
             "--download-sections", section_arg,
-            "-f", "best[height<=1080][ext=mp4]/bestvideo[height<=1080][ext=mp4]+bestaudio[ext=m4a]/best",
+            # bestvideo+bestaudio first — pre-muxed MP4s cap at ~360p (see download_clip)
+            "-f", "bestvideo[height<=1080][ext=mp4]+bestaudio[ext=m4a]/best[height<=1080][ext=mp4]/best",
             "--merge-output-format", "mp4",
             "-o", str(output_path),
             "--no-playlist",
