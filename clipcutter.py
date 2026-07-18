@@ -232,6 +232,12 @@ def extract_clip_local(clip_id: str, source_path: str):
 
 # ---------- Export ----------
 
+# One x264 encode at a time. Every clip worker chains into export the moment
+# its extraction lands, so a 5-clip session would otherwise run 5 concurrent
+# encodes — each starved to a fraction of the CPU until all of them blow the
+# timeout. x264 already uses all cores; serializing is strictly faster.
+_export_lock = threading.Lock()
+
 def export_clip(clip_id: str):
     """Re-encode a clip's raw download to CFR MP4 in the output folder.
     No trim (full raw range), no captions, no vertical crop — just DaVinci-ready CFR."""
@@ -270,7 +276,8 @@ def export_clip(clip_id: str):
             str(output_path),
         ]
 
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+        with _export_lock:
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=1800)
 
         if result.returncode == 0:
             conn.execute(
@@ -284,6 +291,13 @@ def export_clip(clip_id: str):
                 "UPDATE clips SET status = 'error', error_text = ? WHERE id = ?",
                 (f"Export failed: {error_msg[:400]}", clip_id)
             )
+        conn.commit()
+    except subprocess.TimeoutExpired:
+        log.error("Export timed out for clip %s", clip_id)
+        conn.execute(
+            "UPDATE clips SET status = 'error', error_text = 'Export timed out (30 min) — Retry to try again' WHERE id = ?",
+            (clip_id,)
+        )
         conn.commit()
     except Exception as e:
         conn.execute(
