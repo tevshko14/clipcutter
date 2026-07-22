@@ -1279,6 +1279,7 @@ const EMPTY_CLIPS = `<div class="empty"><div class="empty-icon">&#9986;</div><di
 const EMPTY_HISTORY = `<div class="empty"><div class="empty-icon">&#128197;</div><div class="empty-title">No shows yet</div><div class="empty-sub">Your past shows will appear here</div></div>`;
 
 let currentSessionId = null;
+let currentSessionShowId = null;  // the show a viewed session came from (for the Back button)
 let clipDataCache = {};
 let pollTimer = null;
 
@@ -1401,7 +1402,13 @@ function renderClips(session) {
   const errorCount = clips.filter(c => c.status === 'error').length;
   const settled = doneCount + errorCount === total && total > 0;
 
-  let html = `<div class="section-label">${esc(session.video_title || 'Session')}</div>`;
+  let html = `<div style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:10px;">
+    <div style="display:flex;align-items:center;gap:8px;min-width:0;">
+      ${currentSessionShowId ? `<button class="btn-ghost btn-sm" onclick="backToShow()" style="font-size:11px;flex-shrink:0;">&larr; Show</button>` : ''}
+      <div class="section-label" style="margin:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(session.video_title || 'Session')}</div>
+    </div>
+    <button class="btn-ghost btn-sm" onclick="openSessionExportFolder('${session.id}')" style="font-size:11px;flex-shrink:0;">&#128193; Clips folder</button>
+  </div>`;
   html += `<div class="session-progress">`;
   html += `<div class="progress-bar"><div class="progress-fill ${settled ? 'done' : ''}" style="width:${total > 0 ? (doneCount/total*100) : 0}%"></div></div>`;
   html += `<div class="progress-text">${doneCount}/${total} clips done${errorCount ? ` · ${errorCount} failed` : ''}${session.youtube_url ? ' · ' + esc(shortUrl(session.youtube_url)) : ''}</div>`;
@@ -1423,10 +1430,6 @@ function renderClips(session) {
     </div>`;
   });
   html += `</div>`;
-
-  if (settled && doneCount > 0) {
-    html += `<button class="btn-primary" style="width:100%; margin-top:14px;" onclick="openSessionExportFolder('${session.id}')">&#128193; Open clips folder</button>`;
-  }
 
   $('clipsContent').innerHTML = html;
 }
@@ -1563,6 +1566,7 @@ function renderLiveLobby(shows) {
           </div>
           <div style="display:flex;gap:6px;align-items:center;flex-shrink:0;">
             ${stateBadge}
+            ${s.generated_session_id ? `<button class="btn-ghost btn-sm" onclick="event.stopPropagation(); openSessionExportFolder('${s.generated_session_id}')" style="font-size:10px;padding:3px 8px;" title="Open clips folder">&#128193;</button>` : ''}
             ${s.state === 'ended' && s.clip_count > 0 ? `<button class="btn-ghost btn-sm" onclick="event.stopPropagation(); openShow('${s.id}')" style="font-size:10px;padding:3px 10px;">Get Clips</button>` : ''}
             <button class="delete-btn" onclick="event.stopPropagation(); deleteShow('${s.id}')" title="Delete show">&#10005;</button>
           </div>
@@ -1883,6 +1887,7 @@ async function getShowClips() {
   currentShow.generated_session_id = d.session_id;
   toast(`${d.clip_count} clips started`);
   currentSessionId = d.session_id;
+  currentSessionShowId = s.id;
   switchView('clips');
   startPolling(d.session_id);
   loadSession(d.session_id);
@@ -1890,8 +1895,17 @@ async function getShowClips() {
 
 function viewGeneratedSession(sessionId) {
   currentSessionId = sessionId;
+  currentSessionShowId = currentShow ? currentShow.id : null;
   switchView('clips');
   loadSession(sessionId);
+}
+
+async function backToShow() {
+  if (!currentSessionShowId) { switchView('live'); return; }
+  // Load the show into #view-live BEFORE switching so loadLiveTab (fired by
+  // switchView) sees currentShow set and re-renders it, never the lobby.
+  await openShow(currentSessionShowId);
+  switchView('live');
 }
 
 function copyShowTimestamps() {
@@ -2212,7 +2226,8 @@ function renderHistoryShowRow(s, session) {
       </div>
       <div style="display:flex;gap:6px;align-items:center;flex-shrink:0;">
         ${stateBadge}
-        ${session ? `<button class="btn-ghost btn-sm" onclick="event.stopPropagation(); openSession('${session.id}')" style="font-size:10px;padding:3px 10px;">View clips</button>` : ''}
+        ${s.generated_session_id ? `<button class="btn-ghost btn-sm" onclick="event.stopPropagation(); openSessionExportFolder('${s.generated_session_id}')" style="font-size:10px;padding:3px 8px;" title="Open clips folder">&#128193;</button>` : ''}
+        ${session ? `<button class="btn-ghost btn-sm" onclick="event.stopPropagation(); openSession('${session.id}', '${s.id}')" style="font-size:10px;padding:3px 10px;">View clips</button>` : ''}
         <button class="delete-btn" onclick="event.stopPropagation(); deleteShow('${s.id}').then(loadHistory)" title="Delete show">&#10005;</button>
       </div>
     </div>`;
@@ -2233,13 +2248,15 @@ function renderHistorySessionRow(s) {
       </div>
       <div style="display:flex;gap:6px;align-items:center;flex-shrink:0;">
         <span class="clip-badge queued" style="font-size:9px;">session</span>
+        <button class="btn-ghost btn-sm" onclick="event.stopPropagation(); openSessionExportFolder('${s.id}')" style="font-size:10px;padding:3px 8px;" title="Open clips folder">&#128193;</button>
         <button class="delete-btn" onclick="event.stopPropagation(); deleteSession('${s.id}')" title="Delete session">&#10005;</button>
       </div>
     </div>`;
 }
 
-function openSession(sessionId) {
+function openSession(sessionId, showId) {
   currentSessionId = sessionId;
+  currentSessionShowId = showId || null;
   switchView('clips');
   loadSession(sessionId);
 }
