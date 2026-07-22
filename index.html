@@ -4,22 +4,24 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>ClipCutter</title>
-<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
   :root {
-    --bg: #0a0a0c;
-    --surface: #111114;
-    --surface-2: #19191e;
-    --surface-3: #1f1f26;
-    --border: #2a2a32;
-    --border-hover: #3a3a45;
-    --text: #e8e8ed;
-    --text-dim: #7a7a88;
-    --text-dimmer: #55555f;
-    --accent: #f43f5e;
-    --accent-hover: #fb7185;
-    --accent-glow: rgba(244, 63, 94, 0.15);
-    --accent-glow-strong: rgba(244, 63, 94, 0.3);
+    --bg: #111114;
+    --surface: #141418;
+    --surface-2: #17171c;
+    --surface-3: #1e1e27;
+    --border: #232329;
+    --border-hover: #33333d;
+    --input-bg: #0e0e11;
+    --text: #ebebf0;
+    --text-dim: #8e8e99;
+    --text-dimmer: #61616d;
+    --accent: #ff4d6d;
+    --accent-hover: #ff6b83;
+    --accent-text: #ff8099;
+    --accent-glow: rgba(255, 77, 109, 0.15);
+    --accent-glow-strong: rgba(255, 77, 109, 0.3);
     --green: #22c55e;
     --green-dim: rgba(34, 197, 94, 0.12);
     --green-border: rgba(34, 197, 94, 0.25);
@@ -33,7 +35,7 @@
     --blue-dim: rgba(59, 130, 246, 0.1);
     --blue-border: rgba(59, 130, 246, 0.25);
     --mono: 'JetBrains Mono', monospace;
-    --sans: 'Outfit', sans-serif;
+    --sans: 'Space Grotesk', sans-serif;
     --radius: 10px;
   }
 
@@ -58,9 +60,9 @@
   }
 
   .app {
-    max-width: 720px;
+    max-width: 880px;
     margin: 0 auto;
-    padding: 20px 24px 80px;
+    padding: 0 28px 80px;
   }
 
   /* ── Header ── */
@@ -68,27 +70,37 @@
     display: flex;
     align-items: center;
     justify-content: space-between;
-    margin-bottom: 8px;
+    gap: 20px;
+    flex-wrap: wrap;
+    padding: 16px 0;
+    margin-bottom: 24px;
+    border-bottom: 1px solid var(--border);
   }
   .logo-row {
     display: flex;
     align-items: center;
-    gap: 10px;
+    gap: 11px;
   }
   .logo-mark {
-    width: 30px; height: 30px;
+    width: 28px; height: 28px;
     background: var(--accent);
     border-radius: 7px;
     display: grid; place-items: center;
-    font-size: 15px;
-    box-shadow: 0 0 16px var(--accent-glow);
+    font-size: 13px;
+    color: #fff;
     flex-shrink: 0;
   }
   .logo-text {
     font-family: var(--mono);
-    font-size: 18px;
-    font-weight: 700;
-    letter-spacing: -0.5px;
+    font-size: 16px;
+    font-weight: 600;
+    letter-spacing: -0.3px;
+  }
+  .header-right {
+    display: flex;
+    align-items: center;
+    gap: 20px;
+    margin-left: auto;
   }
   .header-actions {
     display: flex;
@@ -97,47 +109,50 @@
   .icon-btn {
     width: 32px; height: 32px;
     background: transparent;
-    border: 1px solid var(--border);
+    border: none;
     border-radius: 8px;
     color: var(--text-dim);
-    font-size: 14px;
+    font-size: 15px;
     cursor: pointer;
     display: grid; place-items: center;
     transition: all 0.15s;
   }
-  .icon-btn:hover { background: var(--surface-2); color: var(--text); border-color: var(--border-hover); }
+  .icon-btn:hover { background: var(--surface-3); color: var(--text); }
 
   /* ── Tabs ── */
   .tabs {
     display: flex;
-    gap: 2px;
-    background: var(--surface);
-    border-radius: 10px;
+    gap: 4px;
+    background: #1a1a20;
+    border-radius: 9px;
     padding: 3px;
-    margin-bottom: 24px;
-    border: 1px solid var(--border);
   }
   .tab {
-    flex: 1;
-    padding: 8px 0;
+    flex: 0 0 auto;
+    padding: 7px 15px;
     text-align: center;
     font-family: var(--mono);
     font-size: 11px;
-    font-weight: 500;
-    letter-spacing: 0.5px;
+    font-weight: 400;
+    letter-spacing: 1px;
     text-transform: uppercase;
-    color: var(--text-dim);
+    color: #6c6c77;
     background: transparent;
     border: none;
-    border-radius: 8px;
+    border-radius: 7px;
     cursor: pointer;
     transition: all 0.15s;
   }
   .tab:hover { color: var(--text); }
   .tab.active {
-    background: var(--surface-3);
-    color: var(--text);
-    box-shadow: 0 1px 4px rgba(0,0,0,0.2);
+    background: #26262e;
+    color: #fff;
+    font-weight: 600;
+  }
+  @media (max-width: 660px) {
+    .header-right { width: 100%; margin-left: 0; justify-content: space-between; }
+    .tabs { flex: 1; }
+    .tab { flex: 1; padding: 7px 4px; }
   }
 
   /* ── Views ── */
@@ -185,9 +200,9 @@
 
   input[type="text"], input[type="number"], input[type="password"], textarea {
     width: 100%;
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
+    background: var(--input-bg);
+    border: 1px solid #2a2a32;
+    border-radius: 8px;
     color: var(--text);
     font-family: var(--mono);
     font-size: 13px;
@@ -238,23 +253,24 @@
   }
 
   .btn-ghost {
-    background: transparent;
-    color: var(--text-dim);
-    border: 1px solid var(--border);
+    background: var(--surface-2);
+    color: #c8c8d1;
+    border: 1px solid #2a2a32;
+    border-radius: 8px;
+    font-weight: 500;
     flex: 1;
   }
-  .btn-ghost:hover { background: var(--surface-2); color: var(--text); border-color: var(--border-hover); }
+  .btn-ghost:hover { color: #fff; border-color: #3c3c45; }
 
   .btn-primary {
     background: var(--accent);
     color: #fff;
+    font-weight: 700;
     flex: 2;
-    box-shadow: 0 2px 16px var(--accent-glow);
+    border-radius: 8px;
   }
   .btn-primary:hover {
     background: var(--accent-hover);
-    box-shadow: 0 4px 24px var(--accent-glow-strong);
-    transform: translateY(-1px);
   }
   .btn-primary:active { transform: translateY(0); }
   .btn-primary:disabled { opacity: 0.35; cursor: not-allowed; transform: none; box-shadow: none; }
@@ -326,7 +342,7 @@
   .clip-badge.downloaded { background: var(--green-dim); color: var(--green); border: 1px solid var(--green-border); }
   .clip-badge.transcribing { background: var(--yellow-dim); color: var(--yellow); border: 1px solid var(--yellow-border); }
   .clip-badge.transcribed { background: var(--green-dim); color: var(--green); border: 1px solid var(--green-border); }
-  .clip-badge.analyzing { background: var(--accent-glow); color: var(--accent); border: 1px solid rgba(244,63,94,0.3); }
+  .clip-badge.analyzing { background: var(--accent-glow); color: var(--accent); border: 1px solid var(--accent-glow-strong); }
   .clip-badge.ready { background: var(--green-dim); color: var(--green); border: 1px solid var(--green-border); }
   .clip-badge.exporting { background: var(--blue-dim); color: var(--blue); border: 1px solid var(--blue-border); }
   .clip-badge.exported { background: var(--green-dim); color: var(--green); border: 1px solid var(--green-border); }
@@ -911,8 +927,8 @@
 
   /* ── Live Show ── */
   .live-dot {
-    width: 10px; height: 10px; border-radius: 50%;
-    background: var(--red);
+    width: 9px; height: 9px; border-radius: 50%;
+    background: var(--accent);
     animation: pulse 1.5s ease-in-out infinite;
     flex-shrink: 0;
   }
@@ -920,10 +936,151 @@
     0%, 100% { opacity: 1; }
     50% { opacity: 0.35; }
   }
+
+  /* Lobby: shows list + new-show panel on the right */
+  .live-lobby {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 268px;
+    gap: 22px;
+    align-items: start;
+  }
+  @media (max-width: 720px) {
+    .live-lobby { grid-template-columns: 1fr; }
+  }
+  .live-lobby-head {
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+    margin-bottom: 16px;
+  }
+  .live-lobby-title { font-size: 16px; font-weight: 700; }
+  .live-lobby-count {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--text-dimmer);
+    white-space: nowrap;
+  }
+  .live-newshow {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+  }
+  .live-newshow h3 {
+    font-size: 20px;
+    font-weight: 700;
+    letter-spacing: -0.5px;
+    margin-bottom: 4px;
+  }
+  .live-newshow .live-newshow-sub {
+    font-size: 12.5px;
+    color: var(--text-dim);
+    line-height: 1.5;
+  }
+  .live-newshow .field { margin-bottom: 0; }
+
+  /* Show rows in the lobby list */
+  .show-row {
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    border-left: 3px solid #2c2c34;
+    border-radius: 10px;
+    padding: 14px 16px;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 12px 14px;
+    cursor: pointer;
+    transition: border-color 0.15s;
+  }
+  .show-row:hover { border-color: var(--border-hover); border-left-color: #2c2c34; }
+  .show-row.is-live { border-left-color: var(--accent); }
+  .show-row.is-live:hover { border-left-color: var(--accent); }
+  .show-row-main { flex: 1 1 190px; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+  .show-row-title {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 14.5px;
+    font-weight: 600;
+    min-width: 0;
+  }
+  .show-row-title span:first-child {
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .show-row-live {
+    font-family: var(--mono);
+    font-size: 9px;
+    letter-spacing: 1.5px;
+    color: var(--accent-text);
+    flex-shrink: 0;
+  }
+  .show-row-date { font-family: var(--mono); font-size: 11px; color: #7c7c88; }
+  .show-row-side { display: flex; align-items: center; gap: 14px; margin-left: auto; }
+  .show-stats { display: flex; gap: 12px; flex-shrink: 0; }
+  .show-stat { display: flex; flex-direction: column; align-items: flex-end; gap: 1px; }
+  .show-stat-v { font-family: var(--mono); font-size: 15px; font-weight: 600; color: #c8c8d1; }
+  .show-stat-v.accent { color: var(--accent-text); }
+  .show-stat-k { font-family: var(--mono); font-size: 9px; letter-spacing: 1px; color: var(--text-dimmer); }
+  .show-row-actions { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+  .show-row-actions .btn-getclips {
+    background: #ebebf0;
+    border: none;
+    border-radius: 7px;
+    padding: 8px 12px;
+    color: #111114;
+    font-size: 12px;
+    font-weight: 700;
+    cursor: pointer;
+    white-space: nowrap;
+  }
+  .show-row-actions .btn-getclips:hover { background: #fff; }
+  .show-row-x {
+    color: #525260;
+    font-size: 13px;
+    background: none;
+    border: none;
+    cursor: pointer;
+    padding: 4px 6px;
+    line-height: 1;
+  }
+  .show-row-x:hover { color: var(--text); }
+
+  /* Numbered empty state */
+  .live-steps { display: flex; flex-direction: column; gap: 14px; padding: 20px 4px; }
+  .live-step { display: flex; gap: 14px; align-items: flex-start; }
+  .live-step-n {
+    width: 24px; height: 24px; border-radius: 50%;
+    background: #22222a;
+    color: var(--text-dim);
+    font-family: var(--mono);
+    font-size: 12px;
+    display: grid; place-items: center;
+    flex-shrink: 0;
+  }
+  .live-step-t { font-size: 13.5px; color: var(--text-dim); padding-top: 3px; line-height: 1.5; }
+  .live-step-t strong { color: var(--text); font-weight: 600; }
+
+  /* Show detail header */
+  .show-head {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    margin-bottom: 20px;
+    flex-wrap: wrap;
+  }
+  .show-head-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+  .show-head-title { font-size: 20px; font-weight: 700; letter-spacing: -0.5px; }
+  .show-head-meta { font-family: var(--mono); font-size: 11.5px; color: #7c7c88; }
+
+  /* Live capture */
   .live-capture-grid {
     display: grid;
     grid-template-columns: 1fr 1fr;
-    gap: 14px;
+    gap: 16px;
   }
   @media (max-width: 620px) {
     .live-capture-grid { grid-template-columns: 1fr; }
@@ -931,8 +1088,8 @@
   .live-capture-section {
     background: var(--surface);
     border: 1px solid var(--border);
-    border-radius: var(--radius);
-    padding: 14px;
+    border-radius: 12px;
+    padding: 18px;
     display: flex;
     flex-direction: column;
     min-width: 0;
@@ -940,41 +1097,47 @@
   .live-capture-section input[type="text"] {
     flex: 1;
     min-width: 0;
+    font-family: var(--sans);
+    font-size: 13px;
+    padding: 11px 13px;
   }
   .capture-chip {
     font-family: var(--mono);
     font-size: 11px;
-    color: var(--accent);
-    background: var(--accent-glow, rgba(244,63,94,0.1));
-    border: 1px solid rgba(244,63,94,0.25);
-    border-radius: 5px;
-    padding: 4px 8px;
+    color: var(--accent-text);
+    background: var(--accent-glow);
+    border: 1px solid var(--accent-glow-strong);
+    border-radius: 6px;
+    padding: 5px 9px;
     white-space: nowrap;
     flex-shrink: 0;
   }
   .live-entry-list {
-    margin-top: 10px;
+    margin-top: 12px;
     max-height: 340px;
     overflow-y: auto;
     display: flex;
     flex-direction: column;
-    gap: 3px;
+    gap: 6px;
   }
   .live-entry-row {
     display: flex;
     align-items: center;
-    gap: 8px;
-    padding: 6px 8px;
-    border-radius: 6px;
+    gap: 14px;
+    padding: 11px 14px;
+    border-radius: 8px;
     background: var(--surface-2);
-    font-size: 12px;
+    border: 1px solid #212129;
+    font-size: 13.5px;
     min-width: 0;
   }
-  .live-entry-row.editing { background: var(--surface-3); }
+  .live-entry-row:hover { border-color: #2c2c34; }
+  .live-entry-row.editing { background: var(--surface-3); border-color: #2c2c34; gap: 8px; }
   .live-entry-time {
     font-family: var(--mono);
-    font-size: 11px;
-    color: var(--accent);
+    font-size: 12.5px;
+    font-weight: 600;
+    color: var(--accent-text);
     min-width: 52px;
     flex-shrink: 0;
   }
@@ -995,36 +1158,122 @@
   .live-entry-actions button {
     background: none;
     border: none;
-    color: var(--text-dimmer);
+    color: #525260;
     cursor: pointer;
     font-size: 12px;
-    padding: 2px 5px;
+    padding: 3px 5px;
     border-radius: 4px;
   }
   .live-entry-actions button:hover { color: var(--text); background: var(--surface-3); }
+  .live-list-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    min-height: 30px;
+    margin-bottom: 14px;
+  }
+  .live-list-head .section-label { margin-bottom: 0; }
+
+  /* Get Clips hero */
   .live-getclips-panel {
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    padding: 16px;
+    background: #15151b;
+    border: 1px solid #262630;
+    border-radius: 12px;
+    padding: 22px;
+  }
+  .live-getclips-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    flex-wrap: wrap;
+    margin-bottom: 16px;
+  }
+  .live-getclips-head .section-label { margin-bottom: 0; }
+  .live-getclips-panel .live-source-row {
+    display: flex;
+    gap: 3px;
+    background: var(--input-bg);
+    border: 1px solid #262630;
+    border-radius: 8px;
+    padding: 3px;
   }
   .live-source-btn {
     font-family: var(--mono);
     font-size: 10px;
+    font-weight: 600;
     text-transform: uppercase;
-    letter-spacing: 0.5px;
-    padding: 6px 14px;
+    letter-spacing: 1px;
+    padding: 6px 12px;
     border-radius: 6px;
-    background: var(--surface-2);
+    background: transparent;
     color: var(--text-dim);
-    border: 1px solid var(--border);
+    border: none;
     cursor: pointer;
+    white-space: nowrap;
   }
   .live-source-btn:hover { color: var(--text); }
   .live-source-btn.active {
     background: var(--accent);
     color: #fff;
-    border-color: var(--accent);
+  }
+  .live-src-box {
+    background: var(--input-bg);
+    border: 1px solid #2a2a32;
+    border-radius: 8px;
+    padding: 11px 15px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 16px;
+  }
+  .live-src-box .btn-ghost { flex: 0 0 auto; }
+  .live-src-name {
+    flex: 1;
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--text-dim);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    min-width: 0;
+  }
+  .live-getclips-run { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
+  .live-getclips-run .btn-primary {
+    flex: 1;
+    padding: 15px;
+    font-size: 15px;
+    min-width: 180px;
+  }
+  .live-offset {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 0;
+    font-family: var(--mono);
+    font-size: 10px;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+    color: var(--text-dim);
+  }
+  .live-offset input {
+    width: 56px;
+    text-align: center;
+    padding: 9px 8px;
+    border-radius: 7px;
+    font-size: 13px;
+  }
+  .live-getclips-note {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    margin-top: 14px;
+    padding-top: 14px;
+    border-top: 1px solid #212129;
+    font-size: 12.5px;
+    color: #9a9aa5;
+    line-height: 1.5;
   }
 
   /* ── History calendar ── */
@@ -1184,17 +1433,17 @@
       <div class="logo-mark">&#9986;</div>
       <div class="logo-text">ClipCutter</div>
     </div>
-    <div class="header-actions">
-      <button class="icon-btn" onclick="openSettings()" title="Settings">&#9881;</button>
+    <div class="header-right">
+      <div class="tabs">
+        <button class="tab active" data-view="live" onclick="switchView('live')">Live</button>
+        <button class="tab" data-view="clips" onclick="switchView('clips')">Clips</button>
+        <button class="tab" data-view="snipcut" onclick="switchView('snipcut')">Convert</button>
+        <button class="tab" data-view="history" onclick="switchView('history')">History</button>
+      </div>
+      <div class="header-actions">
+        <button class="icon-btn" onclick="openSettings()" title="Settings">&#9881;</button>
+      </div>
     </div>
-  </div>
-
-  <!-- Tabs -->
-  <div class="tabs">
-    <button class="tab active" data-view="live" onclick="switchView('live')">Live</button>
-    <button class="tab" data-view="clips" onclick="switchView('clips')">Clips</button>
-    <button class="tab" data-view="snipcut" onclick="switchView('snipcut')">Convert</button>
-    <button class="tab" data-view="history" onclick="switchView('history')">History</button>
   </div>
 
   <!-- Setup check -->
@@ -1540,48 +1789,87 @@ async function loadLiveTab() {
 function renderLiveLobby(shows) {
   stopLiveTimer();
   currentShow = null;
-  let html = `
-    <div class="field">
-      <label>Show Title</label>
-      <input type="text" id="newShowTitle" placeholder="e.g. Fiesta Friday — Apr 24" onkeydown="if(event.key==='Enter')createShow()">
-    </div>
-    <div class="field">
-      <label>YouTube URL <span style="color:var(--text-dimmer);text-transform:none;letter-spacing:0;">(optional — can add later)</span></label>
-      <input type="text" id="newShowUrl" placeholder="https://www.youtube.com/watch?v=..." onkeydown="if(event.key==='Enter')createShow()">
-    </div>
-    <div class="btn-row">
-      <button class="btn-primary" onclick="createShow()">&#127916; New Show</button>
-    </div>`;
-
+  let list;
   if (shows.length > 0) {
-    html += '<div class="section-label" style="margin-top:28px;">Past Shows</div><div class="session-list">';
-    shows.forEach(s => {
+    list = '<div class="session-list">' + shows.map(s => {
       const date = showDateLabel(s);
-      const dur = (s.started_at && s.ended_at) ? fmtHMS(showElapsed(s)) : '';
-      const stateBadge = s.state === 'live'
-        ? '<span class="clip-badge error" style="font-size:9px;">&#9679; LIVE</span>'
-        : s.state === 'ended'
-          ? '<span class="clip-badge exported" style="font-size:9px;">ended</span>'
-          : '<span class="clip-badge queued" style="font-size:9px;">not started</span>';
-      html += `
-        <div class="session-card" onclick="openShow('${s.id}')">
-          <div style="flex:1;min-width:0;">
-            <div style="font-size:13px;font-weight:500;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(s.title)}</div>
-            <div style="font-family:var(--mono);font-size:11px;color:var(--text-dim);margin-top:2px;">
-              ${date}${dur ? ' · ' + dur : ''} · ${s.timestamp_count} ts · ${s.clip_count} clips
+      const dur = (s.started_at && s.ended_at) ? fmtHMS(showElapsed(s)) : '—';
+      const isLive = s.state === 'live';
+      return `
+        <div class="show-row${isLive ? ' is-live' : ''}" onclick="openShow('${s.id}')">
+          <div class="show-row-main">
+            <div class="show-row-title">
+              <span>${esc(s.title)}</span>
+              ${isLive ? '<span class="show-row-live">&#9679; LIVE</span>' : ''}
+            </div>
+            <div class="show-row-date">${date}${s.state === 'pre' ? ' · not started' : ''}</div>
+          </div>
+          <div class="show-row-side">
+            <div class="show-stats">
+              <div class="show-stat">
+                <span class="show-stat-v${isLive ? ' accent' : ''}">${dur}</span>
+                <span class="show-stat-k">DUR</span>
+              </div>
+              <div class="show-stat">
+                <span class="show-stat-v">${s.timestamp_count}</span>
+                <span class="show-stat-k">TS</span>
+              </div>
+              <div class="show-stat">
+                <span class="show-stat-v">${isLive ? '—' : s.clip_count}</span>
+                <span class="show-stat-k">CLIPS</span>
+              </div>
+            </div>
+            <div class="show-row-actions">
+              ${s.generated_session_id ? `<button class="btn-ghost btn-sm" onclick="event.stopPropagation(); openSessionExportFolder('${s.generated_session_id}')" style="flex:0 0 auto;padding:7px 9px;" title="Open clips folder">&#128193;</button>` : ''}
+              ${s.state === 'ended' && s.clip_count > 0 ? `<button class="btn-getclips" onclick="event.stopPropagation(); openShow('${s.id}')">Get clips</button>` : ''}
+              <button class="show-row-x" onclick="event.stopPropagation(); deleteShow('${s.id}')" title="Delete show">&#10005;</button>
             </div>
           </div>
-          <div style="display:flex;gap:6px;align-items:center;flex-shrink:0;">
-            ${stateBadge}
-            ${s.generated_session_id ? `<button class="btn-ghost btn-sm" onclick="event.stopPropagation(); openSessionExportFolder('${s.generated_session_id}')" style="font-size:10px;padding:3px 8px;" title="Open clips folder">&#128193;</button>` : ''}
-            ${s.state === 'ended' && s.clip_count > 0 ? `<button class="btn-ghost btn-sm" onclick="event.stopPropagation(); openShow('${s.id}')" style="font-size:10px;padding:3px 10px;">Get Clips</button>` : ''}
-            <button class="delete-btn" onclick="event.stopPropagation(); deleteShow('${s.id}')" title="Delete show">&#10005;</button>
-          </div>
         </div>`;
-    });
-    html += '</div>';
+    }).join('') + '</div>';
+  } else {
+    list = `
+      <div class="live-steps">
+        <div class="live-step">
+          <span class="live-step-n">1</span>
+          <span class="live-step-t">Name the show and hit <strong>New show</strong> — then <strong>Go Live</strong> when your stream actually starts.</span>
+        </div>
+        <div class="live-step">
+          <span class="live-step-n">2</span>
+          <span class="live-step-t">Paste the YouTube URL whenever the VOD is up — before, during, or after.</span>
+        </div>
+        <div class="live-step">
+          <span class="live-step-n">3</span>
+          <span class="live-step-t">When it ends, hit <strong>Get Clips</strong> to pull every moment you marked.</span>
+        </div>
+      </div>`;
   }
-  $('liveContent').innerHTML = html;
+
+  $('liveContent').innerHTML = `
+    <div class="live-lobby">
+      <div>
+        <div class="live-lobby-head">
+          <span class="live-lobby-title">Shows</span>
+          <span class="live-lobby-count">${shows.length} total</span>
+        </div>
+        ${list}
+      </div>
+      <div class="live-newshow">
+        <div>
+          <h3>New show</h3>
+          <div class="live-newshow-sub">Create it now — the timer starts when you go live.</div>
+        </div>
+        <div class="field">
+          <label>Show Title</label>
+          <input type="text" id="newShowTitle" placeholder="e.g. Fiesta Friday" onkeydown="if(event.key==='Enter')createShow()">
+        </div>
+        <div class="field">
+          <label>YouTube URL <span style="color:var(--text-dimmer);">(optional)</span></label>
+          <input type="text" id="newShowUrl" placeholder="youtube.com/..." onkeydown="if(event.key==='Enter')createShow()">
+        </div>
+        <button class="btn-primary" onclick="createShow()">New show</button>
+      </div>
+    </div>`;
 }
 
 async function createShow() {
@@ -1620,21 +1908,27 @@ function renderShowPre() {
   stopLiveTimer();
   const s = currentShow;
   $('liveContent').innerHTML = `
-    <button class="btn-ghost btn-sm" onclick="currentShow=null; loadLiveTab()" style="margin-bottom:14px;">&larr; All shows</button>
-    <div style="text-align:center;padding:24px 0;">
-      <div style="font-size:20px;font-weight:600;color:var(--text);margin-bottom:6px;">${esc(s.title)}</div>
-      <div style="font-family:var(--mono);font-size:11px;color:var(--text-dimmer);margin-bottom:24px;">Not started</div>
-      <button class="btn-primary" onclick="goLiveShow()" style="padding:16px 48px;font-size:17px;font-weight:700;">&#9679; Go Live</button>
-      <div class="hint" style="margin-top:10px;">Click when your stream actually starts — the timer begins here.</div>
+    <div class="show-head">
+      <button class="btn-ghost btn-sm" onclick="currentShow=null; loadLiveTab()" style="flex:0 0 auto;">&larr; All shows</button>
+      <div class="show-head-text">
+        <span class="show-head-title">${esc(s.title)}</span>
+        <span class="show-head-meta">Not started</span>
+      </div>
     </div>
-    <div class="field" style="margin-top:16px;">
-      <label>YouTube URL</label>
-      <input type="text" id="showUrlInput" value="${esc(s.youtube_url || '')}" placeholder="https://www.youtube.com/watch?v=..."
-        onblur="saveShowUrl()" onkeydown="if(event.key==='Enter'){this.blur();}">
-      <div class="hint">Optional now — needed later only if you Get Clips from URL instead of a local file.</div>
+    <div class="live-getclips-panel" style="text-align:center;padding:32px 22px;">
+      <button class="btn-primary" onclick="goLiveShow()" style="flex:0 0 auto;padding:16px 48px;font-size:17px;">&#9679; Go Live</button>
+      <div class="hint" style="margin-top:12px;">Click when your stream actually starts — the timer begins here.</div>
+    </div>
+    <div class="live-newshow" style="margin-top:16px;">
+      <div class="field">
+        <label>YouTube URL</label>
+        <input type="text" id="showUrlInput" value="${esc(s.youtube_url || '')}" placeholder="https://www.youtube.com/watch?v=..."
+          onblur="saveShowUrl()" onkeydown="if(event.key==='Enter'){this.blur();}">
+        <div class="hint">Optional now — needed later only if you Get Clips from URL instead of a local file.</div>
+      </div>
     </div>
     <div style="text-align:center;margin-top:20px;">
-      <button class="btn-ghost btn-sm" onclick="deleteShow('${s.id}')" style="color:var(--red);font-size:11px;">Delete show</button>
+      <button class="btn-ghost btn-sm" onclick="deleteShow('${s.id}')" style="flex:0 0 auto;color:var(--red);">Delete show</button>
     </div>`;
 }
 
@@ -1664,16 +1958,16 @@ async function endShow() {
 function renderShowLive() {
   const s = currentShow;
   $('liveContent').innerHTML = `
-    <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:18px;flex-wrap:wrap;">
-      <div style="min-width:0;">
-        <div style="font-size:15px;font-weight:600;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(s.title)}</div>
-        <div style="display:flex;align-items:center;gap:8px;margin-top:4px;">
+    <div class="show-head">
+      <div class="show-head-text">
+        <span class="show-head-title">${esc(s.title)}</span>
+        <div style="display:flex;align-items:center;gap:10px;margin-top:6px;">
           <span class="live-dot"></span>
-          <span style="font-family:var(--mono);font-size:10px;color:var(--red);font-weight:700;letter-spacing:2px;">LIVE</span>
-          <span id="liveTimer" style="font-family:var(--mono);font-size:26px;font-weight:700;color:var(--red);">0:00</span>
+          <span style="font-family:var(--mono);font-size:10px;color:var(--accent-text);font-weight:700;letter-spacing:2px;">LIVE</span>
+          <span id="liveTimer" style="font-family:var(--mono);font-size:26px;font-weight:700;color:var(--accent-text);">0:00</span>
         </div>
       </div>
-      <button class="btn-primary" onclick="endShow()" style="background:var(--red);padding:12px 24px;font-size:14px;font-weight:700;">&#9632; End Show</button>
+      <button class="btn-primary" onclick="endShow()" style="flex:0 0 auto;margin-left:auto;padding:12px 24px;font-size:14px;">&#9632; End Show</button>
     </div>
     <div class="live-capture-grid">
       ${renderCaptureSection('timestamp', 'Timestamps', 'Moment worth noting — chapters, references')}
@@ -1683,11 +1977,16 @@ function renderShowLive() {
   renderEntryLists();
 }
 
-function renderCaptureSection(type, title, hint) {
+// headerExtra is presentational only — an optional button rendered in the
+// section header (used for Copy Timestamps on the ended view).
+function renderCaptureSection(type, title, hint, headerExtra) {
   return `
     <div class="live-capture-section">
-      <div class="section-label" style="margin-bottom:8px;">${title}</div>
-      <div style="display:flex;gap:6px;align-items:center;">
+      <div class="live-list-head">
+        <div class="section-label">${title}</div>
+        ${headerExtra || ''}
+      </div>
+      <div style="display:flex;gap:8px;align-items:center;">
         <input type="text" id="capture-${type}" placeholder="${hint}" autocomplete="off"
           oninput="captureInputChanged('${type}')"
           onkeydown="if(event.key==='Enter')submitCapture('${type}')">
@@ -1750,18 +2049,18 @@ function renderEntryLists() {
     if (!el) return;
     const entries = (currentShow.entries || []).filter(e => e.type === type);
     if (entries.length === 0) {
-      el.innerHTML = '<div style="font-size:11px;color:var(--text-dimmer);padding:10px 2px;">Nothing yet</div>';
+      el.innerHTML = '<div style="font-size:12px;color:var(--text-dimmer);padding:12px 2px;">Nothing yet</div>';
       return;
     }
     el.innerHTML = entries.map(e => {
       if (liveEditingEntryId === e.id) {
         return `
           <div class="live-entry-row editing">
-            <input type="text" id="edit-time-${e.id}" value="${fmtHMS(e.elapsed_seconds)}" style="width:76px;font-family:var(--mono);font-size:11px;padding:4px 6px;">
-            <input type="text" id="edit-note-${e.id}" value="${esc(e.note)}" style="flex:1;font-size:12px;padding:4px 8px;"
+            <input type="text" id="edit-time-${e.id}" value="${fmtHMS(e.elapsed_seconds)}" style="width:76px;font-family:var(--mono);font-size:12px;padding:5px 8px;">
+            <input type="text" id="edit-note-${e.id}" value="${esc(e.note)}" style="flex:1;font-family:var(--sans);font-size:13px;padding:5px 9px;"
               onkeydown="if(event.key==='Enter')saveEntryEdit('${e.id}');if(event.key==='Escape'){liveEditingEntryId=null;renderEntryLists();}">
-            <button class="btn-ghost btn-sm" onclick="saveEntryEdit('${e.id}')" style="font-size:10px;padding:3px 8px;">Save</button>
-            <button class="btn-ghost btn-sm" onclick="liveEditingEntryId=null;renderEntryLists()" style="font-size:10px;padding:3px 8px;">&#10005;</button>
+            <button class="btn-ghost btn-sm" onclick="saveEntryEdit('${e.id}')" style="flex:0 0 auto;font-size:11px;padding:5px 10px;">Save</button>
+            <button class="btn-ghost btn-sm" onclick="liveEditingEntryId=null;renderEntryLists()" style="flex:0 0 auto;font-size:11px;padding:5px 10px;">&#10005;</button>
           </div>`;
       }
       return `
@@ -1817,49 +2116,50 @@ function renderShowEnded() {
   const clipCount = (s.entries || []).filter(e => e.type === 'clip').length;
   const tsCount = (s.entries || []).filter(e => e.type === 'timestamp').length;
   liveClipsFile = '';
+  const copyBtn = `<button class="btn-ghost btn-sm" onclick="copyShowTimestamps()" style="flex:0 0 auto;font-size:12px;padding:6px 11px;">&#128203; Copy Timestamps</button>`;
   $('liveContent').innerHTML = `
-    <button class="btn-ghost btn-sm" onclick="currentShow=null; loadLiveTab()" style="margin-bottom:14px;">&larr; All shows</button>
-    <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:16px;flex-wrap:wrap;">
-      <div style="min-width:0;">
-        <div style="font-size:15px;font-weight:600;color:var(--text);">${esc(s.title)}</div>
-        <div style="font-family:var(--mono);font-size:11px;color:var(--text-dim);margin-top:3px;">
-          Ended · ${fmtHMS(showElapsed(s))} · ${tsCount} ts · ${clipCount} clips
-        </div>
+    <div class="show-head">
+      <button class="btn-ghost btn-sm" onclick="currentShow=null; loadLiveTab()" style="flex:0 0 auto;">&larr; All shows</button>
+      <div class="show-head-text">
+        <span class="show-head-title">${esc(s.title)}</span>
+        <span class="show-head-meta">Ended · ${fmtHMS(showElapsed(s))} · ${tsCount} timestamp${tsCount === 1 ? '' : 's'} · ${clipCount} clip${clipCount === 1 ? '' : 's'}</span>
       </div>
-      <button class="btn-ghost btn-sm" onclick="copyShowTimestamps()" style="font-size:11px;">&#128203; Copy Timestamps</button>
     </div>
 
     <div class="live-getclips-panel">
-      <div class="section-label" style="margin-bottom:10px;">Get Clips — ${clipCount} potential clip${clipCount === 1 ? '' : 's'}</div>
-      ${clipCount === 0 ? '<div style="font-size:12px;color:var(--text-dimmer);">No Potential Clips entries on this show. Move a timestamp over with &#8644; or add one below.</div>' : `
-      <div style="display:flex;gap:6px;margin-bottom:12px;">
-        <button class="live-source-btn ${liveClipsSource === 'local' ? 'active' : ''}" onclick="setClipsSource('local')">Local recording</button>
-        <button class="live-source-btn ${liveClipsSource === 'url' ? 'active' : ''}" onclick="setClipsSource('url')">YouTube URL</button>
-      </div>
-      <div id="clipsSourceLocal" style="display:${liveClipsSource === 'local' ? 'block' : 'none'};margin-bottom:12px;">
-        <div style="display:flex;gap:8px;align-items:center;">
-          <button class="btn-ghost btn-sm" onclick="pickShowClipsFile()">&#128193; Browse recording</button>
-          <span id="clipsFileStatus" style="font-family:var(--mono);font-size:10px;color:var(--text-dimmer);"></span>
+      ${clipCount === 0 ? `
+      <div class="section-label">Get Clips</div>
+      <div style="font-size:12.5px;color:var(--text-dim);line-height:1.5;">No Potential Clips entries on this show. Move a timestamp over with &#8644; or add one below.</div>
+      ` : `
+      <div class="live-getclips-head">
+        <div class="section-label">Get Clips <span style="color:var(--text-dimmer);">— ${clipCount} potential clip${clipCount === 1 ? '' : 's'}</span></div>
+        <div class="live-source-row">
+          <button class="live-source-btn ${liveClipsSource === 'local' ? 'active' : ''}" onclick="setClipsSource('local')">Local recording</button>
+          <button class="live-source-btn ${liveClipsSource === 'url' ? 'active' : ''}" onclick="setClipsSource('url')">YouTube URL</button>
         </div>
       </div>
-      <div id="clipsSourceUrl" style="display:${liveClipsSource === 'url' ? 'block' : 'none'};margin-bottom:12px;">
-        <input type="text" id="clipsUrlInput" value="${esc(s.youtube_url || '')}" placeholder="https://www.youtube.com/watch?v=..." style="font-family:var(--mono);font-size:12px;">
+      <div id="clipsSourceLocal" style="display:${liveClipsSource === 'local' ? 'block' : 'none'};">
+        <div class="live-src-box">
+          <button class="btn-ghost btn-sm" onclick="pickShowClipsFile()">&#128193; Browse recording</button>
+          <span id="clipsFileStatus" class="live-src-name"></span>
+        </div>
       </div>
-      <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
-        <button class="btn-primary" onclick="getShowClips()" style="padding:12px 28px;font-size:14px;">&#9986; Get Clips</button>
-        <label style="font-family:var(--mono);font-size:10px;color:var(--text-dimmer);display:flex;align-items:center;gap:6px;">
-          offset <input type="number" id="clipsOffsetInput" value="0" step="1" style="width:64px;font-family:var(--mono);font-size:11px;padding:4px 6px;"> sec
-        </label>
+      <div id="clipsSourceUrl" style="display:${liveClipsSource === 'url' ? 'block' : 'none'};">
+        <input type="text" id="clipsUrlInput" value="${esc(s.youtube_url || '')}" placeholder="https://www.youtube.com/watch?v=..." style="font-size:12.5px;margin-bottom:16px;">
       </div>
-      ${s.generated_session_id ? `<div style="margin-top:10px;font-size:11px;color:var(--yellow);">&#9888; Clips already generated once for this show. <a href="#" onclick="viewGeneratedSession('${s.generated_session_id}'); return false;" style="color:var(--accent);">View session</a> — running again creates a new one.</div>` : ''}
+      <div class="live-getclips-run">
+        <button class="btn-primary" onclick="getShowClips()">&#9986; Get Clips</button>
+        <label class="live-offset">offset <input type="number" id="clipsOffsetInput" value="0" step="1"> sec</label>
+      </div>
+      ${s.generated_session_id ? `<div class="live-getclips-note"><span style="color:var(--yellow);">&#9888;</span><span>Clips already generated once for this show. <a href="#" onclick="viewGeneratedSession('${s.generated_session_id}'); return false;" style="color:var(--accent-text);font-weight:600;">View session</a> — running again creates a new one.</span></div>` : ''}
       `}
     </div>
 
     <div class="live-capture-grid" style="margin-top:20px;">
-      ${renderCaptureSection('timestamp', 'Timestamps', 'Add a missed moment (time editable)')}
+      ${renderCaptureSection('timestamp', 'Timestamps', 'Add a missed moment (time editable)', copyBtn)}
       ${renderCaptureSection('clip', 'Potential Clips', 'Add a missed clip moment')}
     </div>
-    <div class="hint" style="margin-top:8px;">Entries are still editable — new ones are stamped at the show's end time; click &#9998; to set the real time.</div>`;
+    <div class="hint" style="margin-top:16px;">Entries are still editable — new ones are stamped at the show's end time; click &#9998; to set the real time.</div>`;
   renderEntryLists();
 }
 
