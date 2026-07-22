@@ -287,27 +287,34 @@
   .clip-card {
     background: var(--surface);
     border: 1px solid var(--border);
-    border-radius: var(--radius);
-    padding: 14px 16px;
+    border-left: 3px solid #2c2c34;
+    border-radius: 10px;
+    padding: 15px 18px;
     display: flex;
     align-items: center;
-    gap: 12px;
+    gap: 14px;
     transition: border-color 0.15s;
     cursor: default;
   }
   .clip-card:hover { border-color: var(--border-hover); }
+  /* Status rail — declared after :hover so the left edge keeps its colour */
+  .clip-card.queued { border-left-color: #3a3a44; }
+  .clip-card.downloading { border-left-color: var(--yellow); }
+  .clip-card.ready, .clip-card.exporting { border-left-color: var(--blue); }
+  .clip-card.exported { border-left-color: var(--green); }
+  .clip-card.error { border-left-color: var(--red); }
 
   .clip-status {
-    width: 8px; height: 8px;
+    width: 9px; height: 9px;
     border-radius: 50%;
     flex-shrink: 0;
   }
-  .clip-status.queued { background: var(--text-dimmer); }
-  .clip-status.downloading { background: var(--blue); animation: pulse 1s ease-in-out infinite; }
+  .clip-status.queued { background: #3a3a44; }
+  .clip-status.downloading { background: var(--yellow); animation: pulse 1s ease-in-out infinite; }
   .clip-status.downloaded { background: var(--green); }
   .clip-status.transcribing { background: var(--yellow); animation: pulse 1s ease-in-out infinite; }
   .clip-status.analyzing { background: var(--accent); animation: pulse 1s ease-in-out infinite; }
-  .clip-status.ready { background: var(--green); }
+  .clip-status.ready { background: var(--blue); animation: pulse 1s ease-in-out infinite; }
   .clip-status.exporting { background: var(--blue); animation: pulse 1s ease-in-out infinite; }
   .clip-status.exported { background: var(--green); }
   .clip-status.error { background: var(--red); }
@@ -331,19 +338,24 @@
   .clip-badge {
     font-family: var(--mono);
     font-size: 10px;
-    padding: 3px 8px;
+    font-weight: 600;
+    padding: 5px 10px;
     border-radius: 6px;
     flex-shrink: 0;
     text-transform: uppercase;
-    letter-spacing: 0.5px;
+    letter-spacing: 1px;
+    white-space: nowrap;
   }
-  .clip-badge.queued { background: var(--surface-2); color: var(--text-dimmer); }
-  .clip-badge.downloading { background: var(--blue-dim); color: var(--blue); border: 1px solid var(--blue-border); }
+  /* Pill colour tracks the human label in CLIP_STATUS_LABELS, not the raw
+     status: downloading reads "extracting" (amber), ready reads
+     "converting" (blue). */
+  .clip-badge.queued { background: var(--surface-3); color: var(--text-dim); border: 1px solid #2c2c34; }
+  .clip-badge.downloading { background: var(--yellow-dim); color: var(--yellow); border: 1px solid var(--yellow-border); }
   .clip-badge.downloaded { background: var(--green-dim); color: var(--green); border: 1px solid var(--green-border); }
   .clip-badge.transcribing { background: var(--yellow-dim); color: var(--yellow); border: 1px solid var(--yellow-border); }
   .clip-badge.transcribed { background: var(--green-dim); color: var(--green); border: 1px solid var(--green-border); }
   .clip-badge.analyzing { background: var(--accent-glow); color: var(--accent); border: 1px solid var(--accent-glow-strong); }
-  .clip-badge.ready { background: var(--green-dim); color: var(--green); border: 1px solid var(--green-border); }
+  .clip-badge.ready { background: var(--blue-dim); color: var(--blue); border: 1px solid var(--blue-border); }
   .clip-badge.exporting { background: var(--blue-dim); color: var(--blue); border: 1px solid var(--blue-border); }
   .clip-badge.exported { background: var(--green-dim); color: var(--green); border: 1px solid var(--green-border); }
   .clip-badge.error { background: var(--red-dim); color: var(--red); border: 1px solid var(--red-border); }
@@ -684,32 +696,63 @@
 
   /* ── Progress bar (for clips view) ── */
   .session-progress {
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    padding: 12px 16px;
-    margin-bottom: 14px;
+    background: #15151b;
+    border: 1px solid #262630;
+    border-radius: 12px;
+    padding: 18px 20px;
+    margin-bottom: 16px;
+  }
+  .session-progress-head {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 14px;
+    margin-bottom: 12px;
+  }
+  .session-progress-count { font-size: 15px; font-weight: 700; white-space: nowrap; }
+  .session-progress-url {
+    font-family: var(--mono);
+    font-size: 11.5px;
+    color: #7c7c88;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    min-width: 0;
   }
   .progress-bar {
     width: 100%;
-    height: 4px;
-    background: var(--surface-3);
-    border-radius: 2px;
+    height: 8px;
+    background: #22222c;
+    border-radius: 4px;
     overflow: hidden;
-    margin-bottom: 6px;
   }
   .progress-fill {
     height: 100%;
     background: var(--accent);
-    border-radius: 2px;
-    transition: width 0.4s ease;
+    border-radius: 4px;
+    transition: width 0.6s ease;
     width: 0%;
   }
   .progress-fill.done { background: var(--green); }
-  .progress-text {
+
+  /* Clips view header: back / title / folder */
+  .clips-head {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    flex-wrap: wrap;
+    margin-bottom: 18px;
+  }
+  .clips-head-title {
     font-family: var(--mono);
-    font-size: 11px;
+    font-size: 12px;
+    letter-spacing: 1px;
+    text-transform: uppercase;
     color: var(--text-dim);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    min-width: 0;
   }
 
   /* ── Toast ── */
@@ -763,12 +806,22 @@
   .cell-note { font-family: var(--sans); font-weight: 500; font-size: 13px; }
   .cell-mono { font-family: var(--mono); color: var(--text-dim); font-size: 11px; }
 
-  /* ── SnipCut ── */
+  /* ── SnipCut / Convert ── */
+  .conv-head {
+    display: flex;
+    align-items: baseline;
+    gap: 12px;
+    flex-wrap: wrap;
+    margin-bottom: 18px;
+  }
+  .conv-title { font-size: 20px; font-weight: 700; letter-spacing: -0.5px; }
+  .conv-sub { font-family: var(--mono); font-size: 11px; color: #7c7c88; }
+
   .drop-zone {
     background: var(--surface);
-    border: 2px dashed var(--border);
-    border-radius: 14px;
-    padding: 40px 24px;
+    border: 1px dashed #30303a;
+    border-radius: 12px;
+    padding: 44px 24px;
     text-align: center;
     transition: all 0.2s;
     cursor: default;
@@ -776,18 +829,34 @@
   .drop-zone.active {
     border-color: var(--accent);
     background: var(--accent-glow);
-    box-shadow: 0 0 0 3px var(--accent-glow);
   }
-  .drop-zone-icon { font-size: 32px; margin-bottom: 12px; opacity: 0.7; }
-  .drop-zone-title { font-size: 15px; color: var(--text); font-weight: 500; margin-bottom: 4px; }
-  .drop-zone-sub { font-size: 12px; color: var(--text-dim); margin-bottom: 16px; }
-  .drop-zone-hint { font-size: 11px; color: var(--text-dimmer); margin-top: 16px; }
+  .drop-zone-icon { font-size: 30px; margin-bottom: 14px; opacity: 0.7; }
+  .drop-zone-title { font-size: 17px; color: var(--text); font-weight: 700; letter-spacing: -0.3px; margin-bottom: 6px; }
+  .drop-zone-sub {
+    font-size: 12.5px;
+    color: var(--text-dim);
+    line-height: 1.5;
+    max-width: 430px;
+    margin: 0 auto 18px;
+  }
+  .drop-zone-hint {
+    font-family: var(--mono);
+    font-size: 10px;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+    color: var(--text-dimmer);
+    margin-top: 22px;
+    padding-top: 18px;
+    border-top: 1px solid #212129;
+  }
   .drop-zone-hint input {
-    background: var(--surface-2);
-    border: 1px solid var(--border);
-    border-radius: 6px;
+    background: var(--input-bg);
+    border: 1px solid #2a2a32;
+    border-radius: 7px;
     color: var(--text);
     font-family: var(--mono);
+    text-transform: none;
+    letter-spacing: 0;
     outline: none;
   }
   .drop-zone-hint input:focus { border-color: var(--accent); }
@@ -795,19 +864,24 @@
   .snipcut-job-card {
     background: var(--surface);
     border: 1px solid var(--border);
-    border-radius: var(--radius);
-    padding: 14px 16px;
+    border-left: 3px solid #2c2c34;
+    border-radius: 10px;
+    padding: 15px 18px;
     margin-bottom: 10px;
   }
+  .snipcut-job-card.done { border-left-color: var(--green); }
+  .snipcut-job-card.error { border-left-color: var(--red); }
+  .snipcut-job-card.probing,
+  .snipcut-job-card.processing { border-left-color: var(--blue); }
   .snipcut-job-header {
     display: flex;
     align-items: center;
     justify-content: space-between;
     gap: 10px;
-    margin-bottom: 10px;
+    margin-bottom: 12px;
   }
-  .snipcut-job-title { font-weight: 500; font-size: 13px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .snipcut-job-meta { font-family: var(--mono); font-size: 11px; color: var(--text-dim); margin-top: 2px; }
+  .snipcut-job-title { font-weight: 600; font-size: 14.5px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .snipcut-job-meta { font-family: var(--mono); font-size: 11.5px; color: #7c7c88; margin-top: 3px; }
 
   .snipcut-progress-row {
     display: flex;
@@ -826,16 +900,16 @@
   }
   .snipcut-progress-bar {
     flex: 1;
-    height: 6px;
-    background: var(--surface-3);
-    border-radius: 3px;
+    height: 8px;
+    background: #22222c;
+    border-radius: 4px;
     overflow: hidden;
   }
   .snipcut-progress-fill {
     height: 100%;
     background: var(--accent);
-    transition: width 0.4s ease;
-    border-radius: 3px;
+    transition: width 0.6s ease;
+    border-radius: 4px;
   }
   .snipcut-progress-pct {
     font-family: var(--mono);
@@ -1632,18 +1706,24 @@
 
   <!-- ══ CONVERT VIEW ══ -->
   <div class="view" id="view-snipcut">
-    <div class="section-label" style="margin-bottom:10px;">Convert · VFR recording → DaVinci-ready CFR</div>
+    <div class="conv-head">
+      <span class="conv-title">Convert</span>
+      <span class="conv-sub">VFR recording → DaVinci-ready CFR</span>
+    </div>
     <div id="snipcutContent">
       <div id="snipcutDropZone" class="drop-zone">
         <div class="drop-zone-icon">&#127916;</div>
-        <div class="drop-zone-title">Drop a video file or browse to convert</div>
+        <div class="drop-zone-title">Drop a video file to convert</div>
         <div class="drop-zone-sub">StreamYard recordings are variable-frame-rate — this makes a constant-frame-rate copy DaVinci can handle</div>
-        <button class="btn-primary" onclick="snipcutPickFile()" style="margin-top:16px;padding:12px 32px;font-size:14px;">
+        <button class="btn-primary" onclick="snipcutPickFile()" style="flex:0 0 auto;padding:14px 32px;font-size:14px;">
           &#128193; Browse for File
         </button>
         <div class="drop-zone-hint">
-          Or paste path: <input type="text" id="snipcutPathInput" placeholder="/path/to/video.mp4" style="font-family:var(--mono);font-size:11px;width:280px;padding:6px 10px;margin-top:8px;">
-          <button class="btn-ghost btn-sm" onclick="snipcutSubmitPath()" style="margin-left:6px;">Start</button>
+          Or paste a path
+          <div style="display:flex;gap:8px;justify-content:center;align-items:center;margin-top:10px;flex-wrap:wrap;">
+            <input type="text" id="snipcutPathInput" placeholder="/path/to/video.mp4" style="font-size:12px;width:300px;padding:9px 12px;">
+            <button class="btn-ghost btn-sm" onclick="snipcutSubmitPath()" style="flex:0 0 auto;">Start</button>
+          </div>
         </div>
       </div>
     </div>
@@ -1813,21 +1893,22 @@ function renderClips(session) {
   const errorCount = clips.filter(c => c.status === 'error').length;
   const settled = doneCount + errorCount === total && total > 0;
 
-  let html = `<div style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:10px;">
-    <div style="display:flex;align-items:center;gap:8px;min-width:0;">
-      ${currentSessionShowId ? `<button class="btn-ghost btn-sm" onclick="backToShow()" style="font-size:11px;flex-shrink:0;">&larr; Show</button>` : ''}
-      <div class="section-label" style="margin:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(session.video_title || 'Session')}</div>
-    </div>
-    <button class="btn-ghost btn-sm" onclick="openSessionExportFolder('${session.id}')" style="font-size:11px;flex-shrink:0;">&#128193; Clips folder</button>
+  let html = `<div class="clips-head">
+    ${currentSessionShowId ? `<button class="btn-ghost btn-sm" onclick="backToShow()" style="flex:0 0 auto;">&larr; Show</button>` : ''}
+    <span class="clips-head-title">${esc(session.video_title || 'Session')}</span>
+    <button class="btn-ghost btn-sm" onclick="openSessionExportFolder('${session.id}')" style="flex:0 0 auto;margin-left:auto;">&#128193; Clips folder</button>
   </div>`;
-  html += `<div class="session-progress">`;
-  html += `<div class="progress-bar"><div class="progress-fill ${settled ? 'done' : ''}" style="width:${total > 0 ? (doneCount/total*100) : 0}%"></div></div>`;
-  html += `<div class="progress-text">${doneCount}/${total} clips done${errorCount ? ` · ${errorCount} failed` : ''}${session.youtube_url ? ' · ' + esc(shortUrl(session.youtube_url)) : ''}</div>`;
-  html += `</div>`;
+  html += `<div class="session-progress">
+    <div class="session-progress-head">
+      <span class="session-progress-count">${doneCount}/${total} clips done${errorCount ? ` · ${errorCount} failed` : ''}</span>
+      ${session.youtube_url ? `<span class="session-progress-url">${esc(shortUrl(session.youtube_url))}</span>` : ''}
+    </div>
+    <div class="progress-bar"><div class="progress-fill ${settled ? 'done' : ''}" style="width:${total > 0 ? (doneCount/total*100) : 0}%"></div></div>
+  </div>`;
 
   html += `<div class="clip-cards">`;
   clips.forEach(c => {
-    html += `<div class="clip-card">
+    html += `<div class="clip-card ${c.status}">
       <div class="clip-status ${c.status}"></div>
       <div class="clip-info">
         <div class="clip-note">${esc(c.note || 'Untitled clip')}</div>
@@ -1836,7 +1917,7 @@ function renderClips(session) {
       </div>
       <div class="clip-actions">
         <div class="clip-badge ${c.status}">${esc(CLIP_STATUS_LABELS[c.status] || c.status)}</div>
-        ${c.status === 'error' ? `<button class="btn-ghost btn-sm" onclick="event.stopPropagation(); retryClip('${c.id}')" style="padding:3px 10px;font-size:10px;">Retry</button>` : ''}
+        ${c.status === 'error' ? `<button class="btn-ghost btn-sm" onclick="event.stopPropagation(); retryClip('${c.id}')" style="flex:0 0 auto;padding:5px 12px;font-size:11px;">Retry</button>` : ''}
       </div>
     </div>`;
   });
@@ -2424,7 +2505,7 @@ async function loadSnipcutJobs() {
     const jobs = d.jobs || [];
     if (jobs.length === 0) { list.innerHTML = ''; return; }
 
-    let html = '<div class="section-label">Recent Jobs</div>';
+    let html = '<div class="section-label" style="margin-bottom:12px;">Recent Jobs</div>';
     jobs.forEach(j => { html += renderSnipcutJobCard(j); });
     list.innerHTML = html;
 
@@ -2437,8 +2518,8 @@ async function loadSnipcutJobs() {
 
 function renderSnipcutJobCard(j) {
   const durMin = j.duration_seconds ? (j.duration_seconds / 60).toFixed(1) : '—';
-  const vfrBadge = j.is_vfr ? '<span class="clip-badge downloading" style="font-size:9px;">VFR → CFR</span>'
-                             : '<span class="clip-badge ready" style="font-size:9px;">CFR</span>';
+  const vfrBadge = j.is_vfr ? '<span class="clip-badge transcribing">VFR &rarr; CFR</span>'
+                             : '<span class="clip-badge exported">CFR</span>';
 
   let body = '';
   if (j.status === 'error') {
@@ -2446,7 +2527,7 @@ function renderSnipcutJobCard(j) {
   } else if (j.status === 'done') {
     body = `
       <div style="display:flex;gap:8px;margin-top:10px;align-items:center;flex-wrap:wrap;">
-        ${j.cfr_output_path ? `<button class="btn-primary btn-sm" onclick="snipcutRevealFile('${(j.cfr_output_path).replace(/'/g, "\\'")}')" title="Reveal CFR file in Finder">&#128193; Reveal CFR</button>` : ''}
+        ${j.cfr_output_path ? `<button class="btn-primary btn-sm" onclick="snipcutRevealFile('${(j.cfr_output_path).replace(/'/g, "\\'")}')" style="flex:0 0 auto;padding:8px 16px;" title="Reveal CFR file in Finder">&#128193; Reveal CFR</button>` : ''}
       </div>`;
   } else {
     const cfrPct = j.cfr_progress || 0;
@@ -2479,22 +2560,22 @@ function renderSnipcutJobCard(j) {
   }
 
   const statusBadge = j.status === 'done'
-    ? '<span class="clip-badge exported" style="font-size:9px;">Done</span>'
+    ? '<span class="clip-badge exported">Done</span>'
     : j.status === 'error'
-      ? '<span class="clip-badge error" style="font-size:9px;">Error</span>'
-      : `<span class="clip-badge analyzing" style="font-size:9px;">${esc(j.status)}</span>`;
+      ? '<span class="clip-badge error">Error</span>'
+      : `<span class="clip-badge exporting">${esc(j.status)}</span>`;
 
-  return `<div class="snipcut-job-card">
+  return `<div class="snipcut-job-card ${esc(j.status)}">
     <div class="snipcut-job-header">
       <div style="flex:1;min-width:0;">
         <div class="snipcut-job-title">${esc(j.input_filename || 'Untitled')}</div>
         <div class="snipcut-job-meta">${durMin}min${j.is_vfr !== null ? ' · ' : ''}${j.is_vfr ? 'VFR' : (j.is_vfr === 0 ? 'CFR' : '')}</div>
       </div>
-      <div style="display:flex;gap:6px;align-items:center;flex-shrink:0;">
+      <div style="display:flex;gap:7px;align-items:center;flex-shrink:0;">
         ${vfrBadge}
         ${statusBadge}
-        ${j.status === 'error' ? `<button class="btn-ghost btn-sm" onclick="snipcutRetry('${j.id}')" style="font-size:10px;padding:3px 10px;">Retry</button>` : ''}
-        <button class="delete-btn" onclick="snipcutDelete('${j.id}')" title="Delete job">&#10005;</button>
+        ${j.status === 'error' ? `<button class="btn-ghost btn-sm" onclick="snipcutRetry('${j.id}')" style="flex:0 0 auto;font-size:11px;padding:5px 12px;">Retry</button>` : ''}
+        <button class="show-row-x" onclick="snipcutDelete('${j.id}')" title="Delete job">&#10005;</button>
       </div>
     </div>
     ${body}
