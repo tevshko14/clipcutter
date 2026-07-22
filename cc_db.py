@@ -190,18 +190,53 @@ def _sanitize_folder_name(raw: str) -> str:
     return safe or "clip"
 
 
+def _local_date(stored: str) -> str:
+    """Convert a stored UTC timestamp (ISO 'started_at' or SQLite
+    'YYYY-MM-DD HH:MM:SS' CURRENT_TIMESTAMP) to a local YYYY-MM-DD.
+    Desktop app -> local tz is the user's tz, matching what the UI shows.
+    Without this, an evening stream rolls into the next UTC day."""
+    from datetime import datetime, timezone
+    s = (stored or "").strip()
+    if not s:
+        return datetime.now().strftime("%Y-%m-%d")
+    try:
+        if "T" in s:
+            dt = datetime.fromisoformat(s)          # ISO, usually +00:00
+        else:
+            dt = datetime.strptime(s[:19], "%Y-%m-%d %H:%M:%S")  # SQLite UTC
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.astimezone().strftime("%Y-%m-%d")
+    except (ValueError, TypeError):
+        return s[:10]
+
+
 def get_session_output_dir(session_id: str):
     """Return the per-session output folder inside ClipCutter_Clips, creating
-    it if needed. Format: ~/ClipCutter_Clips/YYYY-MM-DD_Video_Title/"""
+    it if needed. Format: ~/ClipCutter_Clips/YYYY-MM-DD_Show_Title/
+    The date is the show's go-live day (when the stream happened) in local
+    time; falls back to the session's own creation date for orphan sessions."""
     with with_db() as conn:
-        row = conn.execute(
+        sess = conn.execute(
             "SELECT video_title, created_at FROM sessions WHERE id = ?", (session_id,)
         ).fetchone()
+        show = conn.execute(
+            "SELECT started_at, created_at FROM shows WHERE generated_session_id = ?",
+            (session_id,)
+        ).fetchone()
 
-    if row and row["video_title"]:
-        date_str = (row["created_at"] or "")[:10]  # YYYY-MM-DD
-        title_slug = _sanitize_folder_name(row["video_title"])[:50]
-        folder_name = f"{date_str}_{title_slug}" if date_str else title_slug
+    title = sess["video_title"] if (sess and sess["video_title"]) else ""
+    if show and show["started_at"]:
+        date_src = show["started_at"]
+    elif show and show["created_at"]:
+        date_src = show["created_at"]
+    elif sess:
+        date_src = sess["created_at"]
+    else:
+        date_src = ""
+
+    if title:
+        folder_name = f"{_local_date(date_src)}_{_sanitize_folder_name(title)[:50]}"
     else:
         folder_name = session_id
 

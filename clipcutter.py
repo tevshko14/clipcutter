@@ -282,9 +282,18 @@ def export_clip(clip_id: str):
         conn.execute("UPDATE clips SET status = 'exporting' WHERE id = ?", (clip_id,))
         conn.commit()
 
+        # Ordinal = this clip's position in the session's timeline, so files
+        # sort in Finder the way they happened during the show.
+        ordered = rows_to_list(conn.execute(
+            "SELECT id FROM clips WHERE session_id = ? ORDER BY center_seconds, id",
+            (clip["session_id"],)
+        ).fetchall())
+        ordinal = next((i + 1 for i, r in enumerate(ordered) if r["id"] == clip_id), 1)
+
         out_dir = get_session_output_dir(clip["session_id"])
-        safe_note = sanitize_note(clip["note"] or "clip")
-        output_path = out_dir / f"{safe_note}_{clip_id[:6]}.mp4"
+        safe_note = sanitize_note(clip["note"] or "clip")[:60]
+        # NN_note_raw.mp4 — numbered, clean note, "raw" marks the unedited cut.
+        output_path = out_dir / f"{ordinal:02d}_{safe_note}_raw.mp4"
 
         cmd = [
             "ffmpeg", "-y",

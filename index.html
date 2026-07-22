@@ -1511,6 +1511,14 @@ function showElapsed(show) {
   return Math.max(0, Math.floor((end - new Date(show.started_at).getTime()) / 1000));
 }
 
+// Local date label for a show — go-live day if it went live, else creation
+// day. Matches the folder date the backend generates for its clips.
+function showDateLabel(s) {
+  const src = s.started_at || s.created_at || '';
+  const iso = src + (src.includes('Z') || src.includes('+') ? '' : 'Z');
+  return new Date(iso).toLocaleDateString('en-US', {month: 'short', day: 'numeric'});
+}
+
 function stopLiveTimer() {
   if (liveTimerInterval) { clearInterval(liveTimerInterval); liveTimerInterval = null; }
 }
@@ -1548,8 +1556,7 @@ function renderLiveLobby(shows) {
   if (shows.length > 0) {
     html += '<div class="section-label" style="margin-top:28px;">Past Shows</div><div class="session-list">';
     shows.forEach(s => {
-      const date = new Date(s.created_at + (s.created_at.includes('Z') || s.created_at.includes('+') ? '' : 'Z'))
-        .toLocaleDateString('en-US', {month:'short', day:'numeric'});
+      const date = showDateLabel(s);
       const dur = (s.started_at && s.ended_at) ? fmtHMS(showElapsed(s)) : '';
       const stateBadge = s.state === 'live'
         ? '<span class="clip-badge error" style="font-size:9px;">&#9679; LIVE</span>'
@@ -2118,7 +2125,7 @@ async function loadHistory() {
     sessions.forEach(s => { sessionById[s.id] = s; });
 
     const items = [
-      ...shows.map(s => ({kind: 'show', date: s.created_at, data: s})),
+      ...shows.map(s => ({kind: 'show', date: s.started_at || s.created_at, data: s})),
       ...orphanSessions.map(s => ({kind: 'session', date: s.created_at, data: s})),
     ].sort((a, b) => new Date(b.date + 'Z') - new Date(a.date + 'Z'));
 
@@ -2204,8 +2211,7 @@ function renderHistoryCalendar(items) {
 }
 
 function renderHistoryShowRow(s, session) {
-  const date = new Date(s.created_at + (s.created_at.includes('Z') ? '' : 'Z'))
-    .toLocaleDateString('en-US', {month: 'short', day: 'numeric'});
+  const date = showDateLabel(s);
   let dur = '';
   if (s.started_at && s.ended_at) {
     dur = fmtHMS(Math.floor((new Date(s.ended_at).getTime() - new Date(s.started_at).getTime()) / 1000));
