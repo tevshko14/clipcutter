@@ -1277,84 +1277,246 @@
   }
 
   /* ── History calendar ── */
+  .hist-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    flex-wrap: wrap;
+    margin-bottom: 18px;
+  }
+  .hist-head-left { display: flex; align-items: center; gap: 12px; }
+  .hist-title { font-size: 20px; font-weight: 700; letter-spacing: -0.5px; }
+  .hist-count { font-family: var(--mono); font-size: 11px; color: #7c7c88; white-space: nowrap; }
+  .hist-toggle-group {
+    display: flex;
+    gap: 4px;
+    background: #1a1a20;
+    border-radius: 8px;
+    padding: 3px;
+  }
   .hist-toggle {
     font-family: var(--mono);
     font-size: 10px;
+    font-weight: 600;
     text-transform: uppercase;
-    letter-spacing: 0.5px;
-    padding: 4px 12px;
+    letter-spacing: 1px;
+    padding: 7px 14px;
     border-radius: 6px;
     background: transparent;
     color: var(--text-dim);
     border: none;
     cursor: pointer;
   }
-  .hist-toggle.active { background: var(--surface-3); color: var(--text); }
+  .hist-toggle:hover { color: var(--text); }
+  .hist-toggle.active { background: var(--accent); color: #fff; }
+
+  /* Calendar + linked detail panel */
+  .hist-split {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 300px;
+    gap: 18px;
+    align-items: start;
+  }
+  @media (max-width: 760px) {
+    .hist-split { grid-template-columns: 1fr; }
+  }
   .hist-cal {
     background: var(--surface);
     border: 1px solid var(--border);
-    border-radius: var(--radius);
-    padding: 14px;
-    margin-bottom: 14px;
+    border-radius: 12px;
+    padding: 18px;
   }
   .hist-cal-head {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    margin-bottom: 10px;
-    font-size: 13px;
-    font-weight: 600;
+    margin-bottom: 14px;
+    font-size: 15px;
+    font-weight: 700;
     color: var(--text);
   }
   .hist-cal-head button {
     width: 28px; height: 28px;
-    background: none;
+    background: var(--surface-3);
     border: none;
-    border-radius: 6px;
-    color: var(--text-dim);
-    font-size: 16px;
+    border-radius: 7px;
+    color: #c8c8d1;
+    font-size: 13px;
     cursor: pointer;
+    display: grid; place-items: center;
+    padding: 0;
   }
-  .hist-cal-head button:hover { background: var(--surface-3); color: var(--text); }
+  .hist-cal-head button:hover { background: #26262e; color: var(--text); }
   .hist-cal-grid {
     display: grid;
     grid-template-columns: repeat(7, 1fr);
-    gap: 3px;
+    gap: 5px;
   }
   .hist-cal-dow {
     text-align: center;
     font-family: var(--mono);
-    font-size: 9px;
+    font-size: 10px;
     color: var(--text-dimmer);
-    padding: 4px 0;
+    padding: 0 0 6px;
   }
   .hist-cal-day {
     aspect-ratio: 1;
     display: flex;
     flex-direction: column;
+    justify-content: space-between;
+    align-items: stretch;
+    position: relative;
+    background: transparent;
+    border: 1px solid #1c1c22;
+    border-radius: 8px;
+    padding: 7px;
+    font-family: var(--mono);
+    font-size: 12px;
+    font-weight: 400;
+    color: #c8c8d1;
+    cursor: pointer;
+    text-align: left;
+  }
+  .hist-cal-day:hover { border-color: var(--border-hover); }
+  .hist-cal-day.has-items {
+    background: var(--accent-glow);
+    border-color: var(--accent-glow-strong);
+    font-weight: 700;
+  }
+  .hist-cal-day.selected {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: #fff;
+    font-weight: 700;
+  }
+  .hist-cal-day.today { box-shadow: inset 0 0 0 1px var(--accent-glow-strong); }
+  .hist-cal-day .day-count {
+    align-self: flex-end;
+    font-family: var(--mono);
+    font-size: 9px;
+    font-weight: 600;
+    color: var(--accent-text);
+    background: var(--accent-glow-strong);
+    border-radius: 5px;
+    padding: 1px 5px;
+  }
+  .hist-cal-day.selected .day-count { color: #fff; background: rgba(255,255,255,0.25); }
+
+  /* Detail panel beside the calendar */
+  .hist-panel {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 18px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    min-height: 320px;
+  }
+  .hist-panel-head {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    padding-bottom: 12px;
+    border-bottom: 1px solid #212129;
+  }
+  .hist-panel-title { font-size: 15px; font-weight: 700; }
+  .hist-panel-sub { font-family: var(--mono); font-size: 11px; color: #7c7c88; }
+  .hist-panel-list {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    max-height: 420px;
+    overflow-y: auto;
+  }
+  .hist-panel-empty {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
     align-items: center;
     justify-content: center;
-    position: relative;
-    background: none;
-    border: none;
-    border-radius: 8px;
-    font-size: 12px;
-    color: var(--text-dimmer);
+    gap: 6px;
+    text-align: center;
+    padding: 20px;
+  }
+
+  /* Run cards (used in both the panel and the list view) */
+  .hist-run {
+    background: var(--surface-2);
+    border: 1px solid #212129;
+    border-left: 3px solid #2c2c34;
+    border-radius: 10px;
+    padding: 13px 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 9px;
     cursor: pointer;
   }
-  .hist-cal-day:hover { background: var(--surface-2); }
-  .hist-cal-day.has-items { background: var(--surface-2); color: var(--text); font-weight: 600; }
-  .hist-cal-day.has-items:hover { background: var(--surface-3); }
-  .hist-cal-day.selected { background: var(--accent); color: #fff; }
-  .hist-cal-day.today { box-shadow: inset 0 0 0 1px rgba(244,63,94,0.5); }
-  .hist-cal-day .dot {
-    position: absolute;
-    bottom: 4px;
-    width: 4px; height: 4px;
-    border-radius: 50%;
-    background: var(--accent);
+  .hist-run:hover { border-color: var(--border-hover); }
+  .hist-run.is-live { border-left-color: var(--accent); }
+  .hist-run.is-ended { border-left-color: var(--green); }
+  .hist-run-top { display: flex; align-items: center; gap: 8px; }
+  .hist-run-title {
+    font-size: 14px;
+    font-weight: 600;
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    min-width: 0;
   }
-  .hist-cal-day.selected .dot { background: #fff; }
+  .hist-pill {
+    font-family: var(--mono);
+    font-size: 9px;
+    font-weight: 600;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+    border-radius: 5px;
+    padding: 3px 7px;
+    white-space: nowrap;
+    flex-shrink: 0;
+  }
+  .hist-pill.ended { color: var(--green); background: var(--green-dim); }
+  .hist-pill.live { color: var(--accent-text); background: var(--accent-glow); }
+  .hist-pill.neutral { color: var(--text-dim); background: var(--surface-3); }
+  .hist-chips { display: flex; flex-wrap: wrap; gap: 5px; }
+  .hist-chip {
+    font-family: var(--mono);
+    font-size: 10px;
+    color: #9a9aa5;
+    background: var(--surface-3);
+    border-radius: 5px;
+    padding: 3px 7px;
+    white-space: nowrap;
+  }
+  .hist-run-actions { display: flex; gap: 7px; justify-content: flex-end; }
+  .hist-run-actions .btn-view {
+    flex: 1;
+    background: var(--accent);
+    border: none;
+    border-radius: 7px;
+    padding: 8px;
+    color: #fff;
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+  }
+  .hist-run-actions .btn-view:hover { background: var(--accent-hover); }
+  .hist-run-actions .btn-icon {
+    background: var(--surface-3);
+    border: 1px solid #2c2c34;
+    border-radius: 7px;
+    padding: 8px 11px;
+    color: #c8c8d1;
+    font-size: 13px;
+    cursor: pointer;
+    line-height: 1;
+  }
+  .hist-run-actions .btn-icon:hover { border-color: #3c3c45; color: #fff; }
+  .hist-run-actions .btn-icon.danger:hover { color: var(--red); border-color: var(--red-border); }
+  /* Full-width list view: don't let the primary action stretch across the row */
+  .session-list .hist-run-actions .btn-view { flex: 0 0 auto; padding: 8px 18px; }
 
   /* ── Step Bar ── */
   .step-bar {
@@ -2398,7 +2560,7 @@ function stopSnipcutPolling() {
 })();
 
 // ── History: shows + month calendar ──
-let histView = 'list';        // 'list' | 'calendar'
+let histView = 'calendar';    // 'list' | 'calendar'
 let histMonth = null;         // Date at first of displayed month
 let histSelectedDay = null;   // 'YYYY-MM-DD' filter
 
@@ -2439,36 +2601,66 @@ async function loadHistory() {
       histMonth = new Date(now.getFullYear(), now.getMonth(), 1);
     }
 
+    // Same visible-item rule as before: a selected calendar day filters the
+    // list, everything else shows all runs. Only the framing around it changed.
+    const visible = (histView === 'calendar' && histSelectedDay)
+      ? items.filter(i => dayKey(i.date) === histSelectedDay)
+      : items;
+
+    const rows = visible.map(item => item.kind === 'show'
+      ? renderHistoryShowRow(item.data, sessionById[item.data.generated_session_id])
+      : renderHistorySessionRow(item.data)).join('');
+
     let html = `
-      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
-        <div class="section-label" style="margin:0;">History</div>
-        <div style="display:flex;gap:4px;background:var(--surface-2);border:1px solid var(--border);border-radius:8px;padding:3px;">
+      <div class="hist-head">
+        <div class="hist-head-left">
+          <span class="hist-title">History</span>
+          <span class="hist-count">${histSummary(items)}</span>
+        </div>
+        <div class="hist-toggle-group">
           <button class="hist-toggle ${histView === 'list' ? 'active' : ''}" onclick="histView='list';histSelectedDay=null;loadHistory()">List</button>
           <button class="hist-toggle ${histView === 'calendar' ? 'active' : ''}" onclick="histView='calendar';loadHistory()">Calendar</button>
         </div>
       </div>`;
 
-    if (histView === 'calendar') html += renderHistoryCalendar(items);
-
-    const visible = (histView === 'calendar' && histSelectedDay)
-      ? items.filter(i => dayKey(i.date) === histSelectedDay)
-      : items;
-
-    html += '<div class="session-list">';
-    visible.forEach(item => {
-      html += item.kind === 'show'
-        ? renderHistoryShowRow(item.data, sessionById[item.data.generated_session_id])
-        : renderHistorySessionRow(item.data);
-    });
-    html += '</div>';
-    if (histView === 'calendar' && histSelectedDay && visible.length === 0) {
-      html += '<div style="font-size:12px;color:var(--text-dimmer);text-align:center;padding:16px;">Nothing on this day</div>';
+    if (histView === 'calendar') {
+      let panelTitle = 'All runs', panelSub = histSummary(items);
+      if (histSelectedDay) {
+        panelTitle = new Date(histSelectedDay + 'T00:00:00')
+          .toLocaleDateString('en-US', {weekday: 'short', month: 'short', day: 'numeric'});
+        panelSub = visible.length ? histSummary(visible) : 'Nothing on this day';
+      }
+      html += `
+        <div class="hist-split">
+          ${renderHistoryCalendar(items)}
+          <div class="hist-panel">
+            <div class="hist-panel-head">
+              <span class="hist-panel-title">${panelTitle}</span>
+              <span class="hist-panel-sub">${panelSub}</span>
+            </div>
+            ${visible.length ? `<div class="hist-panel-list">${rows}</div>` : `
+            <div class="hist-panel-empty">
+              <span style="font-size:22px;color:#33333d;">&#9675;</span>
+              <span style="font-size:13px;color:#7c7c88;">Nothing on this day.</span>
+              <span style="font-size:11.5px;color:#55555e;">Pick a highlighted day to see its runs.</span>
+            </div>`}
+          </div>
+        </div>`;
+    } else {
+      html += `<div class="session-list">${rows}</div>`;
     }
 
     $('historyContent').innerHTML = html;
   } catch(e) {
     $('historyContent').innerHTML = EMPTY_HISTORY;
   }
+}
+
+// Display-only: "N runs · M clips" for a set of history items.
+function histSummary(list) {
+  const clips = list.reduce((n, i) => n +
+    (i.kind === 'show' ? (i.data.clip_count || 0) : (i.data.clips || []).length), 0);
+  return `${list.length} run${list.length === 1 ? '' : 's'} · ${clips} clips`;
 }
 
 function renderHistoryCalendar(items) {
@@ -2498,15 +2690,11 @@ function renderHistoryCalendar(items) {
     html += `
       <button class="hist-cal-day ${has ? 'has-items' : ''} ${sel ? 'selected' : ''} ${iso === todayKey ? 'today' : ''}"
         onclick="histSelectedDay = ${sel ? 'null' : `'${iso}'`}; loadHistory()">
-        ${d}${has ? '<span class="dot"></span>' : ''}
+        <span>${d}</span>
+        ${has ? `<span class="day-count">${(byDay[iso] || []).length}</span>` : ''}
       </button>`;
   }
-  html += '</div>';
-  if (histSelectedDay) {
-    const n = (byDay[histSelectedDay] || []).length;
-    html += `<div style="font-family:var(--mono);font-size:10px;color:var(--text-dim);margin-top:8px;">${n} item${n === 1 ? '' : 's'} on ${histSelectedDay}</div>`;
-  }
-  html += '</div>';
+  html += '</div></div>';
   return html;
 }
 
@@ -2517,24 +2705,28 @@ function renderHistoryShowRow(s, session) {
     dur = fmtHMS(Math.floor((new Date(s.ended_at).getTime() - new Date(s.started_at).getTime()) / 1000));
   }
   const stateBadge = s.state === 'live'
-    ? '<span class="clip-badge error" style="font-size:9px;">&#9679; LIVE</span>'
+    ? '<span class="hist-pill live">&#9679; Live</span>'
     : s.state === 'ended'
-      ? '<span class="clip-badge exported" style="font-size:9px;">ended</span>'
-      : '<span class="clip-badge queued" style="font-size:9px;">not started</span>';
+      ? '<span class="hist-pill ended">Ended</span>'
+      : '<span class="hist-pill neutral">Not started</span>';
   const clipsDone = session ? (session.clips || []).filter(c => c.status === 'exported').length : 0;
   return `
-    <div class="session-card" onclick="openShow('${s.id}'); switchView('live')">
-      <div style="flex:1;min-width:0;">
-        <div style="font-size:13px;font-weight:500;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(s.title)}</div>
-        <div style="font-family:var(--mono);font-size:11px;color:var(--text-dim);margin-top:2px;">
-          ${date}${dur ? ' · ' + dur : ''} · ${s.timestamp_count} ts · ${s.clip_count} clips${session ? ` · ${clipsDone} files` : ''}
-        </div>
-      </div>
-      <div style="display:flex;gap:6px;align-items:center;flex-shrink:0;">
+    <div class="hist-run is-${s.state}" onclick="openShow('${s.id}'); switchView('live')">
+      <div class="hist-run-top">
+        <span class="hist-run-title">${esc(s.title)}</span>
         ${stateBadge}
-        ${s.generated_session_id ? `<button class="btn-ghost btn-sm" onclick="event.stopPropagation(); openSessionExportFolder('${s.generated_session_id}')" style="font-size:10px;padding:3px 8px;" title="Open clips folder">&#128193;</button>` : ''}
-        ${session ? `<button class="btn-ghost btn-sm" onclick="event.stopPropagation(); openSession('${session.id}', '${s.id}')" style="font-size:10px;padding:3px 10px;">View clips</button>` : ''}
-        <button class="delete-btn" onclick="event.stopPropagation(); deleteShow('${s.id}').then(loadHistory)" title="Delete show">&#10005;</button>
+      </div>
+      <div class="hist-chips">
+        <span class="hist-chip">${date}</span>
+        ${dur ? `<span class="hist-chip">${dur}</span>` : ''}
+        <span class="hist-chip">${s.timestamp_count} ts</span>
+        <span class="hist-chip">${s.clip_count} clips</span>
+        ${session ? `<span class="hist-chip">${clipsDone} files</span>` : ''}
+      </div>
+      <div class="hist-run-actions">
+        ${session ? `<button class="btn-view" onclick="event.stopPropagation(); openSession('${session.id}', '${s.id}')">View clips &#8594;</button>` : ''}
+        ${s.generated_session_id ? `<button class="btn-icon" onclick="event.stopPropagation(); openSessionExportFolder('${s.generated_session_id}')" title="Open clips folder">&#128193;</button>` : ''}
+        <button class="btn-icon danger" onclick="event.stopPropagation(); deleteShow('${s.id}').then(loadHistory)" title="Delete show">&#10005;</button>
       </div>
     </div>`;
 }
@@ -2545,17 +2737,20 @@ function renderHistorySessionRow(s) {
   const title = s.video_title || shortUrl(s.youtube_url) || 'Session';
   const clipsDone = (s.clips || []).filter(c => c.status === 'exported').length;
   return `
-    <div class="session-card" onclick="openSession('${s.id}')">
-      <div style="flex:1;min-width:0;">
-        <div style="font-size:13px;font-weight:500;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(title)}</div>
-        <div style="font-family:var(--mono);font-size:11px;color:var(--text-dim);margin-top:2px;">
-          ${date} · ${(s.clips || []).length} clips · ${clipsDone} files
-        </div>
+    <div class="hist-run" onclick="openSession('${s.id}')">
+      <div class="hist-run-top">
+        <span class="hist-run-title">${esc(title)}</span>
+        <span class="hist-pill neutral">Session</span>
       </div>
-      <div style="display:flex;gap:6px;align-items:center;flex-shrink:0;">
-        <span class="clip-badge queued" style="font-size:9px;">session</span>
-        <button class="btn-ghost btn-sm" onclick="event.stopPropagation(); openSessionExportFolder('${s.id}')" style="font-size:10px;padding:3px 8px;" title="Open clips folder">&#128193;</button>
-        <button class="delete-btn" onclick="event.stopPropagation(); deleteSession('${s.id}')" title="Delete session">&#10005;</button>
+      <div class="hist-chips">
+        <span class="hist-chip">${date}</span>
+        <span class="hist-chip">${(s.clips || []).length} clips</span>
+        <span class="hist-chip">${clipsDone} files</span>
+      </div>
+      <div class="hist-run-actions">
+        <button class="btn-view" onclick="event.stopPropagation(); openSession('${s.id}')">View clips &#8594;</button>
+        <button class="btn-icon" onclick="event.stopPropagation(); openSessionExportFolder('${s.id}')" title="Open clips folder">&#128193;</button>
+        <button class="btn-icon danger" onclick="event.stopPropagation(); deleteSession('${s.id}')" title="Delete session">&#10005;</button>
       </div>
     </div>`;
 }
