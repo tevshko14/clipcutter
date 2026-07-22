@@ -97,6 +97,28 @@ app = Flask(__name__)
 
 # ---------- Clip Workers ----------
 
+def _classify_download_error(output: str) -> str:
+    """Turn a yt-dlp/ffmpeg failure tail into a short, actionable message.
+    The raw output is often a giant URL fragment that means nothing to a user."""
+    low = (output or "").lower()
+    # Post-live DVR / livestream: ffmpeg can't seek into fragmented streams to
+    # cut a section, so every clip dies with "Invalid data" / exit 183.
+    if ("playlist_type/dvr" in low or "invalid data found" in low
+            or "exited with code 183" in low or "force_finished" in low):
+        return ("Can't cut clips from a livestream URL. Use your local recording "
+                "instead: End Show → Get Clips → Local recording. It's instant and "
+                "higher quality.")
+    if "http error 429" in low or "too many requests" in low:
+        return "YouTube rate-limited the download. Wait a few minutes and Retry, or use the local recording."
+    if "video unavailable" in low or "private video" in low or "members-only" in low:
+        return "This video isn't downloadable (private, members-only, or removed). Use the local recording."
+    if "requested format is not available" in low:
+        return "No HD format available for this video. Use the local recording."
+    # Fall back to the raw tail, but keep it short.
+    tail = (output or "Download failed").strip()
+    return tail[-300:]
+
+
 def download_clip(clip_id: str, url: str):
     """Download one clip segment from YouTube, then auto-export. Runs in a thread."""
     conn = get_db()
@@ -133,8 +155,8 @@ def download_clip(clip_id: str, url: str):
         ]
 
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+        combined_output = (result.stdout or "") + (result.stderr or "")
         if result.returncode != 0:
-            combined_output = (result.stdout or "") + (result.stderr or "")
             log.error("Download failed (rc=%s). Output tail: %s", result.returncode, combined_output[-300:])
 
         if result.returncode == 0:
@@ -146,10 +168,9 @@ def download_clip(clip_id: str, url: str):
             conn.close()
             _finish_clip(clip_id, clip["session_id"])
         else:
-            error_msg = result.stderr[-400:] if result.stderr else "Download failed"
             conn.execute(
                 "UPDATE clips SET status = 'error', error_text = ? WHERE id = ?",
-                (error_msg, clip_id)
+                (_classify_download_error(combined_output), clip_id)
             )
             conn.commit()
             conn.close()
@@ -414,10 +435,10 @@ def retry_clip(clip_id: str):
                     conn.commit()
                     downloaded = True
                 else:
-                    error_msg = result.stderr[-500:] if result.stderr else "Download failed"
+                    combined = (result.stdout or "") + (result.stderr or "")
                     conn.execute(
                         "UPDATE clips SET status = 'error', error_text = ? WHERE id = ?",
-                        (error_msg, clip_id)
+                        (_classify_download_error(combined), clip_id)
                     )
                     conn.commit()
             except (subprocess.TimeoutExpired, FileNotFoundError) as e:
