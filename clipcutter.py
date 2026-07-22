@@ -101,13 +101,15 @@ def _classify_download_error(output: str) -> str:
     """Turn a yt-dlp/ffmpeg failure tail into a short, actionable message.
     The raw output is often a giant URL fragment that means nothing to a user."""
     low = (output or "").lower()
-    # Post-live DVR / livestream: ffmpeg can't seek into fragmented streams to
-    # cut a section, so every clip dies with "Invalid data" / exit 183.
-    if ("playlist_type/dvr" in low or "invalid data found" in low
-            or "exited with code 183" in low or "force_finished" in low):
-        return ("Can't cut clips from a livestream URL. Use your local recording "
-                "instead: End Show → Get Clips → Local recording. It's instant and "
-                "higher quality.")
+    # "Invalid data / exit 183" on a live/DVR URL is almost always transient:
+    # right after a stream ends, YouTube is still finalizing the recording and
+    # its fragments can't be cut yet. It clears on its own within minutes.
+    # (Not a livestream limitation — live clipping works fine once finalized.)
+    if ("invalid data found" in low or "exited with code 183" in low
+            or "playlist_type/dvr" in low or "force_finished" in low):
+        return ("Couldn't cut this section yet. If the stream just ended, YouTube "
+                "is still finalizing it — wait a few minutes and Retry. Or use the "
+                "local recording (Get Clips → Local recording).")
     if "http error 429" in low or "too many requests" in low:
         return "YouTube rate-limited the download. Wait a few minutes and Retry, or use the local recording."
     if "video unavailable" in low or "private video" in low or "members-only" in low:
