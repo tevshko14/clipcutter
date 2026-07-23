@@ -712,6 +712,28 @@
   .empty-title { font-size: 15px; color: var(--text-dim); margin-bottom: 6px; }
   .empty-sub { font-size: 13px; }
 
+  .check-row {
+    display: flex;
+    align-items: flex-start;
+    gap: 9px;
+    font-family: var(--sans);
+    font-size: 13px;
+    font-weight: 400;
+    line-height: 1.45;
+    letter-spacing: 0;
+    text-transform: none;
+    color: var(--text);
+    cursor: pointer;
+    margin-bottom: 0;
+  }
+  .check-row input[type="checkbox"] {
+    width: 15px; height: 15px;
+    accent-color: var(--accent);
+    flex: 0 0 auto;
+    margin-top: 2px;
+    cursor: pointer;
+  }
+
   /* ── Section Label ── */
   .section-label {
     font-family: var(--mono);
@@ -806,6 +828,33 @@
     opacity: 1;
     transform: translateX(-50%) translateY(0);
   }
+  /* Action variant (auto-trash Undo): neutral, not an error, and clickable —
+     the base toast is pointer-events:none, which would swallow the button. */
+  .error-toast.with-action {
+    background: var(--surface-3);
+    border-color: var(--border-hover);
+    color: var(--text);
+    pointer-events: auto;
+    display: flex;
+    align-items: center;
+    gap: 14px;
+  }
+  .toast-undo {
+    background: transparent;
+    border: 1px solid var(--border-hover);
+    border-radius: 6px;
+    color: var(--text);
+    font-family: var(--mono);
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+    padding: 5px 12px;
+    cursor: pointer;
+    flex: 0 0 auto;
+  }
+  .toast-undo:hover { background: var(--surface-2); border-color: var(--accent); color: var(--accent); }
+  .toast-undo:disabled { opacity: 0.5; cursor: default; }
 
   /* ── Preview table ── */
   .table-wrap {
@@ -1782,6 +1831,14 @@
         <input type="number" id="settingsClipWindow" value="5" min="1" max="30">
         <div class="hint">Each Potential Clip becomes this much footage, centered on its timestamp.</div>
       </div>
+      <div class="field">
+        <label>Auto-trash after posting</label>
+        <label class="check-row">
+          <input type="checkbox" id="settingsAutoTrash">
+          <span>Move a clip's video files to the Trash when I mark it Posted</span>
+        </label>
+        <div class="hint">Off by default. Files go to the macOS Trash — recoverable, never permanently deleted — and you'll get an Undo. Un-posting never touches files.</div>
+      </div>
       <div class="modal-actions">
         <button class="btn-ghost btn-sm" onclick="closeSettings()">Cancel</button>
         <button class="btn-primary btn-sm" onclick="saveSettings()">Save</button>
@@ -1812,9 +1869,12 @@ function esc(s) {
 
 function toast(msg, duration) {
   const t = $('toast');
+  clearTimeout(t._hideTimer);                  // don't let an Undo toast's timer win
+  clearTimeout(t._clearTimer);                 // ...nor its pending text-wipe
+  t.classList.remove('with-action');
   t.textContent = msg;
   t.classList.add('show');
-  setTimeout(() => t.classList.remove('show'), duration || 4000);
+  t._hideTimer = setTimeout(() => t.classList.remove('show'), duration || 4000);
 }
 
 // Thin wrapper around fetch for JSON requests to the local Flask backend.
@@ -1879,6 +1939,10 @@ function switchView(name) {
       toast('Starting conversion…');
       snipcutStartFromPath(pendingData.path);
     }
+  } catch(e) {}
+  try {
+    const config = await api('GET', '/api/config');
+    autoTrashEnabled = !!config.auto_trash_on_post;
   } catch(e) {}
   loadLiveTab();
 })();
@@ -1971,22 +2035,75 @@ async function retryClip(clipId) {
   if (currentSessionId) { startPolling(currentSessionId); loadSession(currentSessionId); }
 }
 
+let autoTrashEnabled = false;      // mirrors config.auto_trash_on_post
+let trashConfirmedThisSession = false;
+
 // Flip a clip's "posted to social" label. Optimistic: update the button
 // immediately, persist, revert on failure. Pure bookkeeping — never touches
 // export/convert. The cache update keeps a poll-driven re-render consistent.
 async function togglePosted(clipId, btn) {
   const cached = clipDataCache[clipId];
   const desired = !(cached && cached.posted);
+
+  // Auto-trash is opt-in and only ever fires when turning Posted ON. Confirm
+  // the first time in an app session so a stray tap can't quietly bin a file.
+  if (desired && autoTrashEnabled && !trashConfirmedThisSession) {
+    const ok = confirm(
+      "Auto-trash is on.\n\nMarking this clip Posted will move its video files " +
+      "to the Trash (recoverable — you'll get an Undo).\n\nContinue?"
+    );
+    if (!ok) return;                           // nothing marked, nothing trashed
+    trashConfirmedThisSession = true;
+  }
+
   applyPostedState(btn, desired);
   if (cached) cached.posted = desired ? 1 : 0;
   try {
     const d = await api('POST', `/api/clips/${clipId}/posted`, {posted: desired});
     if (d.error) throw new Error(d.error);
+    if (d.trashed && d.trashed.length) toastUndoTrash(clipId, d.trashed);
   } catch (e) {
     applyPostedState(btn, !desired);           // revert
     if (cached) cached.posted = desired ? 0 : 1;
     toast('Could not save — try again');
   }
+}
+
+// Toast with a working Undo — the backend returns each file's path inside the
+// Trash, so restoring puts it back exactly where it was.
+function toastUndoTrash(clipId, trashed) {
+  const t = $('toast');
+  const label = trashed.length === 1
+    ? `Moved ${trashed[0].name} to Trash`
+    : `Moved ${trashed.length} files to Trash`;
+  clearTimeout(t._clearTimer);                 // cancel any pending text-wipe
+  t.classList.add('with-action');
+  t.innerHTML = '';
+  const msg = document.createElement('span');
+  msg.textContent = label;
+  const undo = document.createElement('button');
+  undo.className = 'toast-undo';
+  undo.textContent = 'Undo';
+  undo.onclick = async () => {
+    undo.disabled = true;
+    const d = await api('POST', `/api/clips/${clipId}/untrash`, {trashed});
+    // toast() replaces this toast outright — calling hideToast() first would
+    // schedule a cleanup that wipes the replacement's text 300ms later.
+    toast(d.restored ? 'Restored from Trash' : 'Could not restore — check the Trash');
+  };
+  t.append(msg, undo);
+  t.classList.add('show');
+  clearTimeout(t._hideTimer);
+  t._hideTimer = setTimeout(hideToast, 8000);
+}
+
+function hideToast() {
+  const t = $('toast');
+  clearTimeout(t._hideTimer);
+  clearTimeout(t._clearTimer);
+  t.classList.remove('show');
+  // Tracked so a toast raised during the fade-out can cancel this cleanup.
+  t._clearTimer = setTimeout(() => { t.classList.remove('with-action'); t.textContent = ''; }, 300);
 }
 
 function applyPostedState(btn, on) {
@@ -2925,6 +3042,8 @@ async function openSettings() {
   try {
     const config = await api('GET', '/api/config');
     $('settingsClipWindow').value = config.default_clip_window || 5;
+    $('settingsAutoTrash').checked = !!config.auto_trash_on_post;
+    autoTrashEnabled = !!config.auto_trash_on_post;
   } catch(e) {}
   $('settingsModal').classList.add('show');
 }
@@ -2935,9 +3054,12 @@ function closeSettings() {
 
 async function saveSettings() {
   try {
+    const autoTrash = $('settingsAutoTrash').checked;
     await api('PUT', '/api/config', {
       default_clip_window: parseInt($('settingsClipWindow').value) || 5,
+      auto_trash_on_post: autoTrash,
     });
+    autoTrashEnabled = autoTrash;
     closeSettings();
     toast('Settings saved');
   } catch(e) { toast('Failed to save settings'); }

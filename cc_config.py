@@ -30,6 +30,9 @@ SUPPORTED_VIDEO_EXTS = (".mp4", ".mkv", ".mov", ".webm", ".avi",
 DEFAULT_CONFIG = {
     "default_clip_window": 5,
     "output_dir": str(OUTPUT_DIR),
+    # Opt-in: when a clip is marked Posted, move its video files to the OS
+    # trash (recoverable). Off by default — see _trash_file in clipcutter.py.
+    "auto_trash_on_post": False,
 }
 
 

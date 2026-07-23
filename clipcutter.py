@@ -630,6 +630,8 @@ def api_update_config():
     for key in ["default_clip_window", "output_dir"]:
         if key in data:
             config[key] = data[key]
+    if "auto_trash_on_post" in data:
+        config["auto_trash_on_post"] = bool(data["auto_trash_on_post"])
     save_config(config)
     return jsonify({"ok": True})
 
@@ -811,17 +813,46 @@ def api_retry_clip(clip_id):
 @app.route("/api/clips/<clip_id>/posted", methods=["POST"])
 def api_set_clip_posted(clip_id):
     """User-set 'posted to social' label. Pure bookkeeping — nothing in the
-    clip pipeline reads it; it only feeds the raw/posted counts in the UI."""
+    clip pipeline reads it; it only feeds the raw/posted counts in the UI.
+
+    Optionally (auto_trash_on_post, default off) moves this clip's own video
+    files to the OS trash on a genuine not-posted -> posted flip. Un-posting
+    never touches files. The DB paths are intentionally left untouched so a
+    restore puts the files back exactly where they were."""
     posted = 1 if (request.json or {}).get("posted") else 0
     conn = get_db()
     try:
-        cur = conn.execute("UPDATE clips SET posted = ? WHERE id = ?", (posted, clip_id))
+        clip = row_to_dict(conn.execute(
+            "SELECT id, posted, raw_file, export_file FROM clips WHERE id = ?", (clip_id,)
+        ).fetchone())
+        if not clip:
+            return jsonify({"error": "Clip not found"}), 404
+        conn.execute("UPDATE clips SET posted = ? WHERE id = ?", (posted, clip_id))
         conn.commit()
     finally:
         conn.close()
-    if cur.rowcount == 0:
-        return jsonify({"error": "Clip not found"}), 404
-    return jsonify({"ok": True, "posted": bool(posted)})
+
+    # Trash only on a real false -> true transition, and only for this clip.
+    # Failures here must never fail the request: the label is already saved.
+    trashed = []
+    became_posted = posted == 1 and not clip["posted"]
+    if became_posted and load_config().get("auto_trash_on_post"):
+        for original in (clip["export_file"], clip["raw_file"]):
+            in_trash = _trash_file(original)
+            if in_trash:
+                trashed.append({"original": original, "trashed": in_trash,
+                                "name": Path(original).name})
+
+    return jsonify({"ok": True, "posted": bool(posted), "trashed": trashed})
+
+
+@app.route("/api/clips/<clip_id>/untrash", methods=["POST"])
+def api_untrash_clip(clip_id):
+    """Undo the auto-trash for one clip — restores each file from the trash."""
+    items = (request.json or {}).get("trashed") or []
+    restored = sum(1 for it in items
+                   if _restore_from_trash(it.get("trashed", ""), it.get("original", "")))
+    return jsonify({"ok": True, "restored": restored})
 
 @app.route("/api/clips/<clip_id>", methods=["DELETE"])
 def api_delete_clip(clip_id):
@@ -887,6 +918,62 @@ def api_open_folder():
     else:
         subprocess.Popen(["xdg-open", folder])
     return jsonify({"ok": True})
+
+
+def _trash_file(path: str):
+    """Move one file to the OS trash — recoverable, never a permanent delete.
+
+    Returns its new path inside the trash (so it can be restored), or None if
+    nothing was moved. Never raises: a missing path, a already-deleted file, an
+    unsupported platform or an API failure are all logged and skipped so the
+    caller (the Posted toggle) is never blocked.
+
+    macOS only. pywebview already requires pyobjc-framework-Cocoa, so this uses
+    the same NSFileManager API Finder does — no extra dependency. On other
+    platforms it deliberately does nothing rather than falling back to any
+    form of permanent deletion.
+    """
+    if not path:
+        return None
+    try:
+        if not Path(path).exists():
+            log.info("Auto-trash: file already gone, skipping: %s", path)
+            return None
+    except OSError as e:
+        log.warning("Auto-trash: cannot stat %s: %s", path, e)
+        return None
+
+    if sys.platform != "darwin":
+        log.info("Auto-trash: no trash API on %s, leaving file in place: %s",
+                 sys.platform, path)
+        return None
+
+    try:
+        from Foundation import NSFileManager, NSURL
+        ok, resulting, err = NSFileManager.defaultManager() \
+            .trashItemAtURL_resultingItemURL_error_(NSURL.fileURLWithPath_(path), None, None)
+        if ok and resulting is not None:
+            log.info("Auto-trash: moved to trash: %s", path)
+            return resulting.path()
+        log.warning("Auto-trash: failed for %s: %s", path, err)
+    except Exception as e:                              # noqa: BLE001 - never block the toggle
+        log.warning("Auto-trash: error for %s: %s", path, e)
+    return None
+
+
+def _restore_from_trash(trash_path: str, original_path: str) -> bool:
+    """Undo one _trash_file: move it back to where it came from."""
+    try:
+        src, dst = Path(trash_path), Path(original_path)
+        if not src.exists() or dst.exists():
+            return False
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        shutil.move(str(src), str(dst))
+        log.info("Auto-trash: restored %s", original_path)
+        return True
+    except (OSError, shutil.Error) as e:
+        log.warning("Auto-trash: restore failed for %s: %s", original_path, e)
+        return False
 
 
 @app.route("/api/open-url", methods=["POST"])
