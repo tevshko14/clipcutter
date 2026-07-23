@@ -874,6 +874,23 @@ def api_open_folder():
     return jsonify({"ok": True})
 
 
+@app.route("/api/open-url", methods=["POST"])
+def api_open_url():
+    """Open a URL in the user's default browser (not the pywebview window).
+    Restricted to http(s) so the OS 'open' handler can't be pointed at a
+    local file or app bundle."""
+    url = ((request.json or {}).get("url") or "").strip()
+    if not (url.startswith("http://") or url.startswith("https://")):
+        return jsonify({"error": "Only http(s) URLs can be opened"}), 400
+    if sys.platform == "darwin":
+        subprocess.Popen(["open", url])
+    elif sys.platform == "win32":
+        subprocess.Popen(["explorer", url])
+    else:
+        subprocess.Popen(["xdg-open", url])
+    return jsonify({"ok": True})
+
+
 # ---------- Live Show Routes (v3) ----------
 
 def _show_state(show: dict) -> str:

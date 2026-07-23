@@ -2121,6 +2121,9 @@ async function createShow() {
   if (!title) { toast('Enter a show title'); return; }
   const d = await api('POST', '/api/shows', {title, youtube_url: url});
   if (d.error) { toast(d.error); return; }
+  // Also open StreamYard so the stream doesn't get forgotten. Fire-and-forget
+  // and non-blocking — a browser hiccup must not stop the show from opening.
+  api('POST', '/api/open-url', {url: 'https://streamyard.com/dashboard'}).catch(() => {});
   openShow(d.show_id);
 }
 
