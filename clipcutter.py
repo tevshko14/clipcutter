@@ -692,7 +692,7 @@ def api_list_sessions():
         # Fetch all clips for all sessions in one query (avoid N+1)
         all_clips = rows_to_list(conn.execute(
             """SELECT id, session_id, note, status, final_start, final_end,
-                      window_seconds, export_file, generated_title
+                      window_seconds, export_file, generated_title, posted
                FROM clips ORDER BY center_seconds"""
         ).fetchall())
 
@@ -749,7 +749,7 @@ def api_get_session(session_id):
                start_seconds, end_seconds, status, error_text, raw_file,
                ai_suggestion_start, ai_suggestion_end, ai_reasoning,
                final_start, final_end, export_file, created_at,
-               generated_title, generated_description
+               generated_title, generated_description, posted
                FROM clips WHERE session_id = ? ORDER BY center_seconds""",
             (session_id,)
         ).fetchall())
@@ -807,6 +807,21 @@ def api_retry_clip(clip_id):
     thread = threading.Thread(target=retry_clip, args=(clip_id,), daemon=True)
     thread.start()
     return jsonify({"ok": True, "message": "Retry started"})
+
+@app.route("/api/clips/<clip_id>/posted", methods=["POST"])
+def api_set_clip_posted(clip_id):
+    """User-set 'posted to social' label. Pure bookkeeping — nothing in the
+    clip pipeline reads it; it only feeds the raw/posted counts in the UI."""
+    posted = 1 if (request.json or {}).get("posted") else 0
+    conn = get_db()
+    try:
+        cur = conn.execute("UPDATE clips SET posted = ? WHERE id = ?", (posted, clip_id))
+        conn.commit()
+    finally:
+        conn.close()
+    if cur.rowcount == 0:
+        return jsonify({"error": "Clip not found"}), 404
+    return jsonify({"ok": True, "posted": bool(posted)})
 
 @app.route("/api/clips/<clip_id>", methods=["DELETE"])
 def api_delete_clip(clip_id):
@@ -921,10 +936,18 @@ def api_create_show():
 @app.route("/api/shows", methods=["GET"])
 def api_list_shows():
     with with_db() as conn:
+        # raw_clip_count / posted_count come from the generated session's
+        # extracted clips (scalar subqueries so they don't fan out the
+        # show_entries join). clip_count (potential-clip markers) is kept
+        # unchanged for anything else that reads it.
         rows = rows_to_list(conn.execute("""
             SELECT s.*,
                    SUM(CASE WHEN e.type = 'timestamp' THEN 1 ELSE 0 END) AS timestamp_count,
-                   SUM(CASE WHEN e.type = 'clip' THEN 1 ELSE 0 END) AS clip_count
+                   SUM(CASE WHEN e.type = 'clip' THEN 1 ELSE 0 END) AS clip_count,
+                   (SELECT COUNT(*) FROM clips c
+                      WHERE c.session_id = s.generated_session_id) AS raw_clip_count,
+                   (SELECT COUNT(*) FROM clips c
+                      WHERE c.session_id = s.generated_session_id AND c.posted = 1) AS posted_count
             FROM shows s
             LEFT JOIN show_entries e ON e.show_id = s.id
             GROUP BY s.id
@@ -935,6 +958,8 @@ def api_list_shows():
         r["state"] = _show_state(r)
         r["timestamp_count"] = r["timestamp_count"] or 0
         r["clip_count"] = r["clip_count"] or 0
+        r["raw_clip_count"] = r["raw_clip_count"] or 0
+        r["posted_count"] = r["posted_count"] or 0
     return jsonify({"shows": rows})
 
 

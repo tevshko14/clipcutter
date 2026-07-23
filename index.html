@@ -370,6 +370,35 @@
   }
   .clip-actions { display: flex; gap: 6px; flex-shrink: 0; align-items: center; }
 
+  /* Posted-to-social toggle — user-set label only, no pipeline effect */
+  .posted-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    flex: 0 0 auto;
+    font-family: var(--mono);
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+    padding: 5px 10px;
+    border-radius: 6px;
+    background: var(--surface-3);
+    color: var(--text-dim);
+    border: 1px solid #2c2c34;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: all 0.15s;
+  }
+  .posted-toggle:hover { color: var(--text); border-color: var(--border-hover); }
+  .posted-toggle .posted-star { font-size: 12px; line-height: 1; }
+  .posted-toggle.on {
+    background: var(--green-dim);
+    color: var(--green);
+    border-color: var(--green-border);
+  }
+  .posted-toggle.on .posted-star { color: var(--green); }
+
   .clip-card.selected { border-color: var(--accent); background: var(--surface-2); }
   .clip-card.clickable { cursor: pointer; }
 
@@ -1917,6 +1946,10 @@ function renderClips(session) {
       </div>
       <div class="clip-actions">
         <div class="clip-badge ${c.status}">${esc(CLIP_STATUS_LABELS[c.status] || c.status)}</div>
+        <button class="posted-toggle ${c.posted ? 'on' : ''}" onclick="event.stopPropagation(); togglePosted('${c.id}', this)"
+          title="${c.posted ? 'Posted to social — click to unmark' : 'Mark as posted to social'}">
+          <span class="posted-star">${c.posted ? '&#9733;' : '&#9734;'}</span> Posted
+        </button>
         ${c.status === 'error' ? `<button class="btn-ghost btn-sm" onclick="event.stopPropagation(); retryClip('${c.id}')" style="flex:0 0 auto;padding:5px 12px;font-size:11px;">Retry</button>` : ''}
       </div>
     </div>`;
@@ -1936,6 +1969,32 @@ async function retryClip(clipId) {
   await api('POST', `/api/clips/${clipId}/retry`);
   toast('Retrying clip');
   if (currentSessionId) { startPolling(currentSessionId); loadSession(currentSessionId); }
+}
+
+// Flip a clip's "posted to social" label. Optimistic: update the button
+// immediately, persist, revert on failure. Pure bookkeeping — never touches
+// export/convert. The cache update keeps a poll-driven re-render consistent.
+async function togglePosted(clipId, btn) {
+  const cached = clipDataCache[clipId];
+  const desired = !(cached && cached.posted);
+  applyPostedState(btn, desired);
+  if (cached) cached.posted = desired ? 1 : 0;
+  try {
+    const d = await api('POST', `/api/clips/${clipId}/posted`, {posted: desired});
+    if (d.error) throw new Error(d.error);
+  } catch (e) {
+    applyPostedState(btn, !desired);           // revert
+    if (cached) cached.posted = desired ? 0 : 1;
+    toast('Could not save — try again');
+  }
+}
+
+function applyPostedState(btn, on) {
+  if (!btn) return;
+  btn.classList.toggle('on', on);
+  const star = btn.querySelector('.posted-star');
+  if (star) star.innerHTML = on ? '&#9733;' : '&#9734;';
+  btn.title = on ? 'Posted to social — click to unmark' : 'Mark as posted to social';
 }
 
 async function openSessionExportFolder(sessionId) {
@@ -2058,8 +2117,12 @@ function renderLiveLobby(shows) {
                 <span class="show-stat-k">TS</span>
               </div>
               <div class="show-stat">
-                <span class="show-stat-v">${isLive ? '—' : s.clip_count}</span>
-                <span class="show-stat-k">CLIPS</span>
+                <span class="show-stat-v">${isLive ? '—' : s.raw_clip_count}</span>
+                <span class="show-stat-k">RAW</span>
+              </div>
+              <div class="show-stat">
+                <span class="show-stat-v${!isLive && s.posted_count > 0 ? ' accent' : ''}">${isLive ? '—' : s.posted_count}</span>
+                <span class="show-stat-k">POSTED</span>
               </div>
             </div>
             <div class="show-row-actions">
