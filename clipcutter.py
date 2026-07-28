@@ -921,6 +921,83 @@ def api_delete_clip(clip_id):
         conn.close()
     return jsonify({"ok": True})
 
+def _pick_kept(clips):
+    """The most central clip in a cluster — the one whose center is closest to
+    the cluster's midpoint (ties break to the earlier clip). Keeping it means a
+    single 5-min window still covers every tap in the cluster."""
+    mid = (min(c["center_seconds"] for c in clips)
+           + max(c["center_seconds"] for c in clips)) / 2
+    return min(clips, key=lambda c: (abs(c["center_seconds"] - mid),
+                                     c["center_seconds"], c["id"]))
+
+
+@app.route("/api/sessions/<session_id>/merge-clips", methods=["POST"])
+def api_merge_session_clips(session_id):
+    """Collapse groups of already-extracted near-duplicate clips. For each group
+    the most central clip is kept; the rest have their video files moved to the
+    OS trash (recoverable) and their rows dropped. Returns undo data so the
+    whole operation can be reversed. Only settled clips (exported/ready) are
+    eligible; the kept clip is never touched."""
+    groups_in = (request.json or {}).get("groups") or []
+    conn = get_db()
+    try:
+        rows = rows_to_list(conn.execute(
+            "SELECT * FROM clips WHERE session_id = ?", (session_id,)
+        ).fetchall())
+        by_id = {c["id"]: c for c in rows}
+        undo, dropped_total = [], 0
+        for grp in groups_in:
+            clips = [by_id[i] for i in grp
+                     if i in by_id and by_id[i]["status"] in ("exported", "ready")]
+            if len(clips) < 2:
+                continue                            # nothing to collapse
+            kept = _pick_kept(clips)
+            for c in clips:
+                if c["id"] == kept["id"]:
+                    continue
+                trashed = []
+                for original in (c.get("export_file"), c.get("raw_file")):
+                    in_trash = _trash_file(original)
+                    if in_trash:
+                        trashed.append({"original": original, "trashed": in_trash})
+                conn.execute("DELETE FROM clips WHERE id = ?", (c["id"],))
+                undo.append({"clip": c, "trashed": trashed})
+                dropped_total += 1
+        conn.commit()
+    finally:
+        conn.close()
+    log.info("Merge session %s: collapsed %d clip(s)", session_id, dropped_total)
+    return jsonify({"ok": True, "merged": dropped_total, "undo": undo})
+
+
+@app.route("/api/sessions/<session_id>/merge-clips/undo", methods=["POST"])
+def api_merge_session_clips_undo(session_id):
+    """Reverse a collapse: restore each dropped clip's files from the trash and
+    re-insert its row exactly as it was."""
+    items = (request.json or {}).get("undo") or []
+    conn = get_db()
+    restored = 0
+    try:
+        valid_cols = {r[1] for r in conn.execute("PRAGMA table_info(clips)")}
+        for it in items:
+            clip = it.get("clip") or {}
+            if not clip.get("id"):
+                continue
+            for t in (it.get("trashed") or []):
+                _restore_from_trash(t.get("trashed", ""), t.get("original", ""))
+            cols = [k for k in clip.keys() if k in valid_cols]   # never trust raw keys in SQL
+            conn.execute(
+                f"INSERT OR REPLACE INTO clips ({', '.join(cols)}) "
+                f"VALUES ({', '.join('?' for _ in cols)})",
+                [clip[k] for k in cols]
+            )
+            restored += 1
+        conn.commit()
+    finally:
+        conn.close()
+    return jsonify({"ok": True, "restored": restored})
+
+
 @app.route("/api/sessions/<session_id>", methods=["DELETE"])
 def api_delete_session(session_id):
     conn = get_db()

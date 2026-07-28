@@ -737,7 +737,20 @@
     text-overflow: ellipsis;
     white-space: nowrap;
     min-width: 0;
+    flex: 1;
   }
+  .merge-fate {
+    font-family: var(--mono);
+    font-size: 9px;
+    font-weight: 600;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+    border-radius: 5px;
+    padding: 3px 7px;
+    flex-shrink: 0;
+  }
+  .merge-fate.keep { color: var(--green); background: var(--green-dim); }
+  .merge-fate.drop { color: var(--text-dim); background: var(--surface-3); }
   .modal-actions {
     display: flex;
     justify-content: flex-end;
@@ -1943,7 +1956,7 @@
     </div>
   </div>
 
-  <!-- Merge suggestion modal -->
+  <!-- Merge suggestion modal (at Get-Clips time) -->
   <div class="modal-overlay" id="mergeModal">
     <div class="modal">
       <div class="modal-title">Merge nearby clips?</div>
@@ -1951,6 +1964,18 @@
       <div class="modal-actions">
         <button class="btn-ghost btn-sm" onclick="closeMergeModal()">Cancel</button>
         <button class="btn-primary btn-sm" onclick="confirmMergeGetClips()">Get Clips</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Merge already-extracted clips modal (in a session) -->
+  <div class="modal-overlay" id="mergeClipsModal">
+    <div class="modal">
+      <div class="modal-title">Merge nearby clips?</div>
+      <div id="mergeClipsModalBody"></div>
+      <div class="modal-actions">
+        <button class="btn-ghost btn-sm" onclick="closeMergeClipsModal()">Cancel</button>
+        <button class="btn-primary btn-sm" onclick="confirmMergeClips()">Merge</button>
       </div>
     </div>
   </div>
@@ -2095,10 +2120,14 @@ function renderClips(session) {
   const errorCount = clips.filter(c => c.status === 'error').length;
   const settled = doneCount + errorCount === total && total > 0;
 
+  const hasDupes = clusterSessionClips(clips).some(c => c.length > 1);
   let html = `<div class="clips-head">
     ${currentSessionShowId ? `<button class="btn-ghost btn-sm" onclick="backToShow()" style="flex:0 0 auto;">&larr; Show</button>` : ''}
     <span class="clips-head-title">${esc(session.video_title || 'Session')}</span>
-    <button class="btn-ghost btn-sm" onclick="openSessionExportFolder('${session.id}')" style="flex:0 0 auto;margin-left:auto;">&#128193; Clips folder</button>
+    <div style="display:flex;gap:8px;margin-left:auto;flex-shrink:0;">
+      ${hasDupes ? `<button class="btn-ghost btn-sm" onclick="openMergeClipsModal()" style="flex:0 0 auto;" title="Collapse near-duplicate clips">&#8646; Merge nearby</button>` : ''}
+      <button class="btn-ghost btn-sm" onclick="openSessionExportFolder('${session.id}')" style="flex:0 0 auto;">&#128193; Clips folder</button>
+    </div>
   </div>`;
   html += `<div class="session-progress">
     <div class="session-progress-head">
@@ -2136,6 +2165,105 @@ function fmtTime(sec) {
   const m = Math.floor(sec / 60);
   const s = Math.floor(sec % 60);
   return `${m}:${s.toString().padStart(2, '0')}`;
+}
+
+// --- Merge already-extracted clips (collapse near-duplicates) ---
+// Group settled clips by proximity, same threshold as the Get-Clips merge.
+function clusterSessionClips(clips) {
+  const settled = (clips || [])
+    .filter(c => c.status === 'exported' || c.status === 'ready')
+    .slice()
+    .sort((a, b) => a.center_seconds - b.center_seconds);
+  const clusters = [];
+  settled.forEach(c => {
+    const last = clusters[clusters.length - 1];
+    if (last && c.center_seconds - last[last.length - 1].center_seconds <= CLIP_MERGE_THRESHOLD_S) {
+      last.push(c);
+    } else {
+      clusters.push([c]);
+    }
+  });
+  return clusters;
+}
+
+// Index of the clip that would be kept (most central), matching the backend.
+function keptIndex(cl) {
+  const mid = (cl[0].center_seconds + cl[cl.length - 1].center_seconds) / 2;
+  let best = 0, bestD = Infinity;
+  cl.forEach((c, i) => { const d = Math.abs(c.center_seconds - mid); if (d < bestD) { bestD = d; best = i; } });
+  return best;
+}
+
+let mergeClipsCandidates = [];   // clusters (length>1) awaiting confirmation
+
+function openMergeClipsModal() {
+  const clips = Object.values(clipDataCache);
+  mergeClipsCandidates = clusterSessionClips(clips).filter(c => c.length > 1);
+  if (!mergeClipsCandidates.length) { toast('No nearby clips to merge'); return; }
+  const rows = mergeClipsCandidates.map((cl, i) => {
+    const kIdx = keptIndex(cl);
+    const items = cl.map((c, j) => `
+      <div class="merge-tap">
+        <span class="merge-tap-time">${c.center_hms || fmtHMS(c.center_seconds)}</span>
+        <span class="merge-tap-note">${esc(c.note) || '<span style="color:var(--text-dimmer)">(no note)</span>'}</span>
+        <span class="merge-fate ${j === kIdx ? 'keep' : 'drop'}">${j === kIdx ? 'keep' : '&#8594; Trash'}</span>
+      </div>`).join('');
+    return `
+      <div class="merge-group">
+        <label class="merge-group-head">
+          <input type="checkbox" class="merge-clips-cb" data-idx="${i}" checked>
+          <span>Merge ${cl.length} clips <span style="color:var(--text-dimmer)">· keep 1, trash ${cl.length - 1}</span></span>
+        </label>
+        <div class="merge-taps">${items}</div>
+      </div>`;
+  }).join('');
+  $('mergeClipsModalBody').innerHTML = `
+    <div class="hint" style="margin-bottom:14px;">These clips overlap heavily — the most central one is kept and the rest move to the Trash (recoverable, with Undo). Uncheck any group to leave it as-is.</div>
+    ${rows}`;
+  $('mergeClipsModal').classList.add('show');
+}
+
+function closeMergeClipsModal() {
+  $('mergeClipsModal').classList.remove('show');
+  mergeClipsCandidates = [];
+}
+
+async function confirmMergeClips() {
+  const groups = [];
+  document.querySelectorAll('.merge-clips-cb').forEach(cb => {
+    if (cb.checked) groups.push(mergeClipsCandidates[parseInt(cb.dataset.idx)].map(c => c.id));
+  });
+  const sid = currentSessionId;
+  closeMergeClipsModal();
+  if (!groups.length) return;
+  const d = await api('POST', `/api/sessions/${sid}/merge-clips`, {groups});
+  if (d.error) { toast(d.error); return; }
+  await loadSession(sid);
+  if (d.merged > 0) {
+    showUndoToast(`${d.merged} clip${d.merged === 1 ? '' : 's'} merged to Trash`, async () => {
+      const u = await api('POST', `/api/sessions/${sid}/merge-clips/undo`, {undo: d.undo});
+      toast(u.restored ? 'Restored' : 'Could not restore — check the Trash');
+      loadSession(sid);
+    });
+  } else {
+    toast('Nothing merged');
+  }
+}
+
+// Neutral toast carrying a working Undo button. Shared, self-contained.
+function showUndoToast(label, onUndo) {
+  const t = $('toast');
+  clearTimeout(t._clearTimer);
+  t.classList.add('with-action');
+  t.innerHTML = '';
+  const msg = document.createElement('span'); msg.textContent = label;
+  const undo = document.createElement('button');
+  undo.className = 'toast-undo'; undo.textContent = 'Undo';
+  undo.onclick = () => { undo.disabled = true; onUndo(); };
+  t.append(msg, undo);
+  t.classList.add('show');
+  clearTimeout(t._hideTimer);
+  t._hideTimer = setTimeout(hideToast, 8000);
 }
 
 async function retryClip(clipId) {
@@ -3300,6 +3428,9 @@ $('settingsModal').addEventListener('click', function(e) {
 });
 $('mergeModal').addEventListener('click', function(e) {
   if (e.target === this) closeMergeModal();
+});
+$('mergeClipsModal').addEventListener('click', function(e) {
+  if (e.target === this) closeMergeClipsModal();
 });
 </script>
 </body>
