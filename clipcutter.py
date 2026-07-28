@@ -637,6 +637,41 @@ def api_update_config():
 
 # -- Sessions --
 
+def _build_clip_specs(clip_entries, merge_groups, offset, duration):
+    """Turn clip taps into extraction specs.
+
+    merge_groups (optional): a list of lists of show_entry ids the user
+    confirmed should combine. Each group becomes one clip centered on the span
+    of its taps, with their notes joined. Any tap not in a group stays its own
+    clip. Without merge_groups every tap is its own clip (the original
+    behavior). Non-destructive: only the extraction output changes, never the
+    stored show_entries."""
+    by_id = {e["id"]: e for e in clip_entries}
+    groups, seen = [], set()
+    for grp in (merge_groups or []):
+        members = [by_id[i] for i in grp if i in by_id and i not in seen]
+        if len(members) > 1:                       # a single id is not a merge
+            groups.append(members)
+            seen.update(e["id"] for e in members)
+    for e in clip_entries:                          # uncovered taps -> own clip
+        if e["id"] not in seen:
+            groups.append([e])
+    groups.sort(key=lambda cl: min(e["elapsed_seconds"] for e in cl))
+
+    specs = []
+    for cl in groups:
+        secs = [e["elapsed_seconds"] for e in cl]
+        notes = []
+        for e in cl:
+            n = (e["note"] or "").strip()
+            if n and n not in notes:
+                notes.append(n)
+        specs.append({"note": " / ".join(notes) or "clip",
+                      "center": (min(secs) + max(secs)) // 2 + offset,
+                      "duration": duration})
+    return specs
+
+
 def _create_clip_session(url: str, local_file: str, clip_specs: list, title: str = "") -> str:
     """Create a session + clips and kick off workers. Returns session_id.
     clip_specs: [{note, center, duration}] — start/end derived from center±half.
@@ -1216,7 +1251,7 @@ def api_show_get_clips(show_id):
         if not show:
             return jsonify({"error": "Show not found"}), 404
         clip_entries = rows_to_list(conn.execute(
-            "SELECT note, elapsed_seconds FROM show_entries "
+            "SELECT id, note, elapsed_seconds FROM show_entries "
             "WHERE show_id = ? AND type = 'clip' ORDER BY elapsed_seconds ASC",
             (show_id,)
         ).fetchall())
@@ -1238,20 +1273,19 @@ def api_show_get_clips(show_id):
         return jsonify({"error": "No YouTube URL on this show — add one or use a local file"}), 400
 
     default_duration = load_config().get("default_clip_window", 5) * 60
-    session_id = _create_clip_session(url, local_file, [
-        {"note": e["note"] or "clip", "center": e["elapsed_seconds"] + offset,
-         "duration": default_duration}
-        for e in clip_entries
-    ], title=show["title"])
+    specs = _build_clip_specs(clip_entries, data.get("merge_groups"),
+                              offset, default_duration)
+    session_id = _create_clip_session(url, local_file, specs, title=show["title"])
 
     with with_db() as conn:
         conn.execute("UPDATE shows SET generated_session_id = ?, youtube_url = ? WHERE id = ?",
                      (session_id, url, show_id))
         conn.commit()
 
-    log.info("Show %s -> session %s (%d clips, offset %+ds, source=%s)",
-             show_id, session_id, len(clip_entries), offset, source)
-    return jsonify({"ok": True, "session_id": session_id, "clip_count": len(clip_entries)})
+    log.info("Show %s -> session %s (%d taps -> %d clips, offset %+ds, source=%s)",
+             show_id, session_id, len(clip_entries), len(specs), offset, source)
+    return jsonify({"ok": True, "session_id": session_id,
+                    "clip_count": len(specs), "tap_count": len(clip_entries)})
 
 
 # ---------- SnipCut Routes ----------

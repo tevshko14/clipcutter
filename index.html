@@ -695,6 +695,49 @@
     margin-bottom: 18px;
   }
   .modal .field { margin-bottom: 16px; }
+
+  /* Merge suggestion rows */
+  .merge-group {
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 12px 14px;
+    margin-bottom: 10px;
+  }
+  .merge-group-head {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text);
+    cursor: pointer;
+    margin-bottom: 10px;
+  }
+  .merge-group-head input[type="checkbox"] {
+    width: 15px; height: 15px;
+    accent-color: var(--accent);
+    flex: 0 0 auto;
+    cursor: pointer;
+  }
+  .merge-taps { display: flex; flex-direction: column; gap: 5px; padding-left: 24px; }
+  .merge-tap { display: flex; align-items: baseline; gap: 12px; }
+  .merge-tap-time {
+    font-family: var(--mono);
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--accent-text);
+    min-width: 52px;
+    flex-shrink: 0;
+  }
+  .merge-tap-note {
+    font-size: 13px;
+    color: var(--text);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    min-width: 0;
+  }
   .modal-actions {
     display: flex;
     justify-content: flex-end;
@@ -1899,6 +1942,18 @@
       </div>
     </div>
   </div>
+
+  <!-- Merge suggestion modal -->
+  <div class="modal-overlay" id="mergeModal">
+    <div class="modal">
+      <div class="modal-title">Merge nearby clips?</div>
+      <div id="mergeModalBody"></div>
+      <div class="modal-actions">
+        <button class="btn-ghost btn-sm" onclick="closeMergeModal()">Cancel</button>
+        <button class="btn-primary btn-sm" onclick="confirmMergeGetClips()">Get Clips</button>
+      </div>
+    </div>
+  </div>
 </div>
 
 <script>
@@ -2704,27 +2759,100 @@ async function pickShowClipsFile() {
   if (el) el.textContent = d.path.split('/').pop();
 }
 
-async function getShowClips() {
+// Taps this close together are offered as a merge suggestion (user confirms).
+const CLIP_MERGE_THRESHOLD_S = 120;
+
+// Group clip taps by proximity. Returns clusters (arrays of entries); any with
+// more than one entry is a merge suggestion.
+function clusterClipTaps() {
+  const taps = (currentShow.entries || [])
+    .filter(e => e.type === 'clip')
+    .sort((a, b) => a.elapsed_seconds - b.elapsed_seconds);
+  const clusters = [];
+  taps.forEach(e => {
+    const last = clusters[clusters.length - 1];
+    if (last && e.elapsed_seconds - last[last.length - 1].elapsed_seconds <= CLIP_MERGE_THRESHOLD_S) {
+      last.push(e);
+    } else {
+      clusters.push([e]);
+    }
+  });
+  return clusters;
+}
+
+// Validate the source, then either surface merge suggestions or extract.
+function getShowClips() {
+  if (liveClipsSource === 'local' && !liveClipsFile) { toast('Browse to your recording first'); return; }
+  if (liveClipsSource === 'url' && !($('clipsUrlInput').value || '').trim()) { toast('Enter the YouTube URL'); return; }
+  const clusters = clusterClipTaps();
+  if (clusters.some(c => c.length > 1)) { openMergeModal(clusters); return; }
+  runGetClips(null);
+}
+
+// mergeGroups: array of arrays of entry ids to combine, or null for no merging.
+async function runGetClips(mergeGroups) {
   const s = currentShow;
   const offset = parseInt($('clipsOffsetInput').value) || 0;
   const body = {source: liveClipsSource, offset_seconds: offset};
   if (liveClipsSource === 'local') {
-    if (!liveClipsFile) { toast('Browse to your recording first'); return; }
     body.local_file = liveClipsFile;
   } else {
-    const url = ($('clipsUrlInput').value || '').trim();
-    if (!url) { toast('Enter the YouTube URL'); return; }
-    body.youtube_url = url;
+    body.youtube_url = ($('clipsUrlInput').value || '').trim();
   }
+  if (mergeGroups && mergeGroups.length) body.merge_groups = mergeGroups;
   const d = await api('POST', `/api/shows/${s.id}/get-clips`, body);
   if (d.error) { toast(d.error); return; }
   currentShow.generated_session_id = d.session_id;
-  toast(`${d.clip_count} clips started`);
+  const merged = (d.tap_count || d.clip_count) - d.clip_count;
+  toast(`${d.clip_count} clips started${merged > 0 ? ` · ${merged} merged` : ''}`);
   currentSessionId = d.session_id;
   currentSessionShowId = s.id;
   switchView('clips');
   startPolling(d.session_id);
   loadSession(d.session_id);
+}
+
+// --- Merge suggestion modal ---
+let mergeCandidateClusters = [];   // clusters (length>1) awaiting confirmation
+
+function openMergeModal(clusters) {
+  mergeCandidateClusters = clusters.filter(c => c.length > 1);
+  const rows = mergeCandidateClusters.map((cl, i) => {
+    const taps = cl.map(e =>
+      `<div class="merge-tap"><span class="merge-tap-time">${fmtHMS(e.elapsed_seconds)}</span><span class="merge-tap-note">${esc(e.note) || '<span style="color:var(--text-dimmer)">(no note)</span>'}</span></div>`
+    ).join('');
+    const span = cl[cl.length - 1].elapsed_seconds - cl[0].elapsed_seconds;
+    return `
+      <div class="merge-group">
+        <label class="merge-group-head">
+          <input type="checkbox" class="merge-group-cb" data-idx="${i}" checked>
+          <span>Merge ${cl.length} taps <span style="color:var(--text-dimmer)">· within ${fmtHMS(span)}</span></span>
+        </label>
+        <div class="merge-taps">${taps}</div>
+      </div>`;
+  }).join('');
+  const singles = clusters.filter(c => c.length === 1).length;
+  $('mergeModalBody').innerHTML = `
+    <div class="hint" style="margin-bottom:14px;">These taps are close together — likely the same segment. Checked groups become one clip; uncheck any you want kept separate.${singles ? ` ${singles} other tap${singles === 1 ? '' : 's'} stay separate.` : ''}</div>
+    ${rows}`;
+  $('mergeModal').classList.add('show');
+}
+
+function closeMergeModal() {
+  $('mergeModal').classList.remove('show');
+  mergeCandidateClusters = [];
+}
+
+function confirmMergeGetClips() {
+  const groups = [];
+  document.querySelectorAll('.merge-group-cb').forEach(cb => {
+    if (cb.checked) {
+      const cl = mergeCandidateClusters[parseInt(cb.dataset.idx)];
+      groups.push(cl.map(e => e.id));
+    }
+  });
+  closeMergeModal();
+  runGetClips(groups);
 }
 
 function viewGeneratedSession(sessionId) {
@@ -3169,6 +3297,9 @@ async function saveSettings() {
 // Close modal on overlay click
 $('settingsModal').addEventListener('click', function(e) {
   if (e.target === this) closeSettings();
+});
+$('mergeModal').addEventListener('click', function(e) {
+  if (e.target === this) closeMergeModal();
 });
 </script>
 </body>
