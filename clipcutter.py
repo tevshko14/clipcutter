@@ -921,80 +921,151 @@ def api_delete_clip(clip_id):
         conn.close()
     return jsonify({"ok": True})
 
-def _pick_kept(clips):
-    """The most central clip in a cluster — the one whose center is closest to
-    the cluster's midpoint (ties break to the earlier clip). Keeping it means a
-    single 5-min window still covers every tap in the cluster."""
-    mid = (min(c["center_seconds"] for c in clips)
-           + max(c["center_seconds"] for c in clips)) / 2
-    return min(clips, key=lambda c: (abs(c["center_seconds"] - mid),
-                                     c["center_seconds"], c["id"]))
+# Undo bundles for stitched merges, keyed by the new merged clip's id. Held in
+# memory only — undo is a right-after action, so losing these on restart is fine.
+_merge_undo = {}
+
+
+def _stitch_pieces(clips):
+    """Cover the union [earliest start, latest end] with no duplicated footage.
+    Returns [(export_file, in_file_offset_seconds)] — the first clip whole, then
+    each later clip's portion beyond what's already covered."""
+    clips = sorted(clips, key=lambda c: c["start_seconds"])
+    pieces = [(clips[0]["export_file"], 0.0)]
+    running_end = clips[0]["end_seconds"]
+    for c in clips[1:]:
+        if c["end_seconds"] > running_end:
+            pieces.append((c["export_file"], max(0.0, running_end - c["start_seconds"])))
+            running_end = c["end_seconds"]
+    return pieces
+
+
+def _stitch_merge_worker(session_id, merged_id, originals, out_path):
+    """Concatenate the originals' export files into one wider clip, then (on
+    success) move the originals to the trash and drop their rows, recording an
+    undo bundle. On failure the merged clip is marked error and originals stay."""
+    pieces = _stitch_pieces(originals)
+    inputs, filt = [], []
+    for k, (f, off) in enumerate(pieces):
+        inputs += ["-i", f]
+        if off > 0:
+            filt.append(f"[{k}:v]trim=start={off:.3f},setpts=PTS-STARTPTS[v{k}];"
+                        f"[{k}:a]atrim=start={off:.3f},asetpts=PTS-STARTPTS[a{k}]")
+        else:
+            filt.append(f"[{k}:v]setpts=PTS-STARTPTS[v{k}];[{k}:a]asetpts=PTS-STARTPTS[a{k}]")
+    concat_in = "".join(f"[v{k}][a{k}]" for k in range(len(pieces)))
+    filt.append(f"{concat_in}concat=n={len(pieces)}:v=1:a=1[v][a]")
+    cmd = ["ffmpeg", "-y", *inputs, "-filter_complex", ";".join(filt),
+           "-map", "[v]", "-map", "[a]",
+           "-c:v", "libx264", "-preset", "veryfast", "-crf", "17", "-r", "30",
+           "-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart", str(out_path)]
+    try:
+        with _export_lock:
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=1800)
+    except subprocess.TimeoutExpired:
+        return _mark_merge_error(merged_id, "Merge stitch timed out")
+    if result.returncode != 0:
+        return _mark_merge_error(merged_id, (result.stderr or "")[-400:] or "Merge stitch failed")
+
+    with with_db() as conn:
+        conn.execute("UPDATE clips SET status='exported', export_file=? WHERE id=?",
+                     (str(out_path), merged_id))
+        dropped = []
+        for c in originals:
+            trashed = []
+            for original in (c.get("export_file"), c.get("raw_file")):
+                t = _trash_file(original)
+                if t:
+                    trashed.append({"original": original, "trashed": t})
+            conn.execute("DELETE FROM clips WHERE id=?", (c["id"],))
+            dropped.append({"clip": c, "trashed": trashed})
+        conn.commit()
+    _merge_undo[merged_id] = {"merged_file": str(out_path), "dropped": dropped}
+    log.info("Stitched merge %s from %d clips -> %s", merged_id, len(originals), out_path.name)
+
+
+def _mark_merge_error(merged_id, msg):
+    with with_db() as conn:
+        conn.execute("UPDATE clips SET status='error', error_text=? WHERE id=?", (msg, merged_id))
+        conn.commit()
+    log.error("Stitch merge %s failed: %s", merged_id, msg)
 
 
 @app.route("/api/sessions/<session_id>/merge-clips", methods=["POST"])
 def api_merge_session_clips(session_id):
-    """Collapse groups of already-extracted near-duplicate clips. For each group
-    the most central clip is kept; the rest have their video files moved to the
-    OS trash (recoverable) and their rows dropped. Returns undo data so the
-    whole operation can be reversed. Only settled clips (exported/ready) are
-    eligible; the kept clip is never touched."""
+    """Stitch each confirmed group of already-extracted clips into ONE wider clip
+    spanning the earliest start to the latest end. Runs in the background: a
+    merged clip row appears as 'exporting' and turns 'exported' when the stitch
+    finishes, at which point the originals move to the trash (recoverable, with
+    Undo). Only settled clips with an export file are eligible."""
     groups_in = (request.json or {}).get("groups") or []
-    conn = get_db()
-    try:
+    started = []
+    with with_db() as conn:
         rows = rows_to_list(conn.execute(
-            "SELECT * FROM clips WHERE session_id = ?", (session_id,)
-        ).fetchall())
+            "SELECT * FROM clips WHERE session_id = ?", (session_id,)).fetchall())
         by_id = {c["id"]: c for c in rows}
-        undo, dropped_total = [], 0
         for grp in groups_in:
-            clips = [by_id[i] for i in grp
-                     if i in by_id and by_id[i]["status"] in ("exported", "ready")]
+            clips = [by_id[i] for i in grp if i in by_id
+                     and by_id[i]["status"] in ("exported", "ready")
+                     and by_id[i].get("export_file")]
             if len(clips) < 2:
-                continue                            # nothing to collapse
-            kept = _pick_kept(clips)
+                continue
+            clips.sort(key=lambda c: c["start_seconds"])
+            merged_start = clips[0]["start_seconds"]
+            merged_end = max(c["end_seconds"] for c in clips)
+            notes = []
             for c in clips:
-                if c["id"] == kept["id"]:
-                    continue
-                trashed = []
-                for original in (c.get("export_file"), c.get("raw_file")):
-                    in_trash = _trash_file(original)
-                    if in_trash:
-                        trashed.append({"original": original, "trashed": in_trash})
-                conn.execute("DELETE FROM clips WHERE id = ?", (c["id"],))
-                undo.append({"clip": c, "trashed": trashed})
-                dropped_total += 1
-        conn.commit()
-    finally:
-        conn.close()
-    log.info("Merge session %s: collapsed %d clip(s)", session_id, dropped_total)
-    return jsonify({"ok": True, "merged": dropped_total, "undo": undo})
+                n = (c["note"] or "").strip()
+                if n and n not in notes:
+                    notes.append(n)
+            note = " / ".join(notes) or "merged"
+            merged_id = uuid.uuid4().hex[:12]
+            conn.execute(
+                """INSERT INTO clips (id, session_id, note, center_seconds,
+                   window_seconds, start_seconds, end_seconds, status, raw_file,
+                   export_file, posted)
+                   VALUES (?,?,?,?,?,?,?, 'exporting', '', '', 0)""",
+                (merged_id, session_id, note, (merged_start + merged_end) // 2,
+                 merged_end - merged_start, merged_start, merged_end))
+            conn.commit()
+            ordered = rows_to_list(conn.execute(
+                "SELECT id FROM clips WHERE session_id=? ORDER BY center_seconds, id",
+                (session_id,)).fetchall())
+            ordinal = next((i + 1 for i, r in enumerate(ordered) if r["id"] == merged_id), 1)
+            out_path = get_session_output_dir(session_id) / \
+                f"{ordinal:02d}_{sanitize_note(note)[:60]}_merged_raw.mp4"
+            threading.Thread(target=_stitch_merge_worker,
+                             args=(session_id, merged_id, clips, out_path),
+                             daemon=True).start()
+            started.append(merged_id)
+    return jsonify({"ok": True, "merged_clip_ids": started})
 
 
 @app.route("/api/sessions/<session_id>/merge-clips/undo", methods=["POST"])
 def api_merge_session_clips_undo(session_id):
-    """Reverse a collapse: restore each dropped clip's files from the trash and
-    re-insert its row exactly as it was."""
-    items = (request.json or {}).get("undo") or []
-    conn = get_db()
+    """Reverse stitched merges: restore each original's files and row, then move
+    the stitched clip to the trash and drop it."""
+    ids = (request.json or {}).get("merged_clip_ids") or []
     restored = 0
-    try:
+    with with_db() as conn:
         valid_cols = {r[1] for r in conn.execute("PRAGMA table_info(clips)")}
-        for it in items:
-            clip = it.get("clip") or {}
-            if not clip.get("id"):
+        for mid in ids:
+            bundle = _merge_undo.pop(mid, None)
+            if not bundle:
                 continue
-            for t in (it.get("trashed") or []):
-                _restore_from_trash(t.get("trashed", ""), t.get("original", ""))
-            cols = [k for k in clip.keys() if k in valid_cols]   # never trust raw keys in SQL
-            conn.execute(
-                f"INSERT OR REPLACE INTO clips ({', '.join(cols)}) "
-                f"VALUES ({', '.join('?' for _ in cols)})",
-                [clip[k] for k in cols]
-            )
+            for it in bundle["dropped"]:
+                clip = it.get("clip") or {}
+                for t in (it.get("trashed") or []):
+                    _restore_from_trash(t.get("trashed", ""), t.get("original", ""))
+                cols = [k for k in clip.keys() if k in valid_cols]  # never trust raw keys in SQL
+                conn.execute(
+                    f"INSERT OR REPLACE INTO clips ({', '.join(cols)}) "
+                    f"VALUES ({', '.join('?' for _ in cols)})",
+                    [clip[k] for k in cols])
+            _trash_file(bundle.get("merged_file"))
+            conn.execute("DELETE FROM clips WHERE id=?", (mid,))
             restored += 1
         conn.commit()
-    finally:
-        conn.close()
     return jsonify({"ok": True, "restored": restored})
 
 

@@ -2096,6 +2096,7 @@ async function loadSession(sessionId) {
 
 async function renderSession(session) {
   renderClips(session);
+  maybeFinishMerge(session);
   const active = (session.clips || []).some(c => ACTIVE_STATUSES.includes(c.status));
   if (active) startPolling(session.id);
   else stopPolling();
@@ -2186,39 +2187,32 @@ function clusterSessionClips(clips) {
   return clusters;
 }
 
-// Index of the clip that would be kept (most central), matching the backend.
-function keptIndex(cl) {
-  const mid = (cl[0].center_seconds + cl[cl.length - 1].center_seconds) / 2;
-  let best = 0, bestD = Infinity;
-  cl.forEach((c, i) => { const d = Math.abs(c.center_seconds - mid); if (d < bestD) { bestD = d; best = i; } });
-  return best;
-}
-
 let mergeClipsCandidates = [];   // clusters (length>1) awaiting confirmation
+let pendingMerge = null;         // {sessionId, ids:[...]} awaiting stitch completion
 
 function openMergeClipsModal() {
   const clips = Object.values(clipDataCache);
   mergeClipsCandidates = clusterSessionClips(clips).filter(c => c.length > 1);
   if (!mergeClipsCandidates.length) { toast('No nearby clips to merge'); return; }
   const rows = mergeClipsCandidates.map((cl, i) => {
-    const kIdx = keptIndex(cl);
-    const items = cl.map((c, j) => `
+    const items = cl.map(c => `
       <div class="merge-tap">
         <span class="merge-tap-time">${c.center_hms || fmtHMS(c.center_seconds)}</span>
         <span class="merge-tap-note">${esc(c.note) || '<span style="color:var(--text-dimmer)">(no note)</span>'}</span>
-        <span class="merge-fate ${j === kIdx ? 'keep' : 'drop'}">${j === kIdx ? 'keep' : '&#8594; Trash'}</span>
       </div>`).join('');
+    const start = Math.min(...cl.map(c => c.start_seconds));
+    const end = Math.max(...cl.map(c => c.end_seconds));
     return `
       <div class="merge-group">
         <label class="merge-group-head">
           <input type="checkbox" class="merge-clips-cb" data-idx="${i}" checked>
-          <span>Merge ${cl.length} clips <span style="color:var(--text-dimmer)">· keep 1, trash ${cl.length - 1}</span></span>
+          <span>Merge ${cl.length} clips <span style="color:var(--text-dimmer)">&#8594; one clip · ${fmtHMS(start)}–${fmtHMS(end)} · ${fmtHMS(end - start)}</span></span>
         </label>
         <div class="merge-taps">${items}</div>
       </div>`;
   }).join('');
   $('mergeClipsModalBody').innerHTML = `
-    <div class="hint" style="margin-bottom:14px;">These clips overlap heavily — the most central one is kept and the rest move to the Trash (recoverable, with Undo). Uncheck any group to leave it as-is.</div>
+    <div class="hint" style="margin-bottom:14px;">Each group is stitched into one wider clip spanning the first clip's start to the last clip's end. Runs in the background; the originals then move to the Trash (recoverable, with Undo). Uncheck any group to leave it as-is.</div>
     ${rows}`;
   $('mergeClipsModal').classList.add('show');
 }
@@ -2238,16 +2232,32 @@ async function confirmMergeClips() {
   if (!groups.length) return;
   const d = await api('POST', `/api/sessions/${sid}/merge-clips`, {groups});
   if (d.error) { toast(d.error); return; }
-  await loadSession(sid);
-  if (d.merged > 0) {
-    showUndoToast(`${d.merged} clip${d.merged === 1 ? '' : 's'} merged to Trash`, async () => {
-      const u = await api('POST', `/api/sessions/${sid}/merge-clips/undo`, {undo: d.undo});
-      toast(u.restored ? 'Restored' : 'Could not restore — check the Trash');
-      loadSession(sid);
-    });
-  } else {
-    toast('Nothing merged');
-  }
+  const ids = d.merged_clip_ids || [];
+  if (!ids.length) { toast('Nothing to merge'); return; }
+  pendingMerge = {sessionId: sid, ids};
+  toast(`Merging ${ids.length} group${ids.length === 1 ? '' : 's'} in the background…`);
+  startPolling(sid);
+  loadSession(sid);
+}
+
+// Called after each session render while a merge is in flight: once every
+// stitched clip has settled, remove the originals from view and offer Undo.
+function maybeFinishMerge(session) {
+  if (!pendingMerge || session.id !== pendingMerge.sessionId) return;
+  const mine = pendingMerge.ids
+    .map(id => (session.clips || []).find(c => c.id === id))
+    .filter(Boolean);
+  if (mine.some(c => c.status === 'exporting')) return;   // still stitching
+  const ids = pendingMerge.ids.slice();
+  const sid = pendingMerge.sessionId;
+  const errored = mine.filter(c => c.status === 'error').length;
+  pendingMerge = null;
+  if (errored) { toast(`${errored} merge${errored === 1 ? '' : 's'} failed`); return; }
+  showUndoToast(`Merged ${ids.length} group${ids.length === 1 ? '' : 's'}`, async () => {
+    const u = await api('POST', `/api/sessions/${sid}/merge-clips/undo`, {merged_clip_ids: ids});
+    toast(u.restored ? 'Merge undone' : 'Could not undo — check the Trash');
+    loadSession(sid);
+  });
 }
 
 // Neutral toast carrying a working Undo button. Shared, self-contained.
@@ -2375,6 +2385,7 @@ function startPolling(sessionId) {
       const session = await api('GET', `/api/sessions/${sessionId}`);
       if (session.error) return;
       renderClips(session);
+      maybeFinishMerge(session);
       const active = (session.clips || []).some(c => ACTIVE_STATUSES.includes(c.status));
       if (!active) stopPolling();
     } catch(e) {}
