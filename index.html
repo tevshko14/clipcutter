@@ -1134,6 +1134,50 @@
   }
   .live-newshow .field { margin-bottom: 0; }
 
+  /* Series quick-pick tags in the New Show panel */
+  .series-tags {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-bottom: 10px;
+  }
+  .series-tag {
+    font-family: var(--mono);
+    font-size: 11px;
+    font-weight: 500;
+    letter-spacing: 0.5px;
+    padding: 7px 12px;
+    border-radius: 7px;
+    background: var(--surface-2);
+    color: var(--text-dim);
+    border: 1px solid var(--border);
+    cursor: pointer;
+    white-space: nowrap;
+    transition: all 0.15s;
+  }
+  .series-tag:hover { color: var(--text); border-color: var(--border-hover); }
+  .series-tag.active {
+    background: var(--accent);
+    color: #fff;
+    border-color: var(--accent);
+  }
+  .series-preview {
+    font-family: var(--mono);
+    font-size: 13px;
+    color: var(--text);
+    background: var(--input-bg);
+    border: 1px solid #2a2a32;
+    border-radius: 8px;
+    padding: 11px 14px;
+  }
+  .series-preview .series-preview-k {
+    font-size: 10px;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+    color: var(--text-dimmer);
+    margin-right: 8px;
+  }
+
   /* Show rows in the lobby list */
   .show-row {
     background: var(--surface-2);
@@ -2205,9 +2249,40 @@ async function loadLiveTab() {
   }
 }
 
+// New Show series quick-pick. A series tag composes "<series> <today>" as the
+// title; "other" reveals the freeform input. null = nothing picked yet (the
+// freeform input is shown by default so typing still works).
+let newShowSelectedTag = null;
+
+function seriesTitle(series) {
+  const date = new Date().toLocaleDateString('en-US', {month: 'short', day: 'numeric'});
+  return `${series} ${date}`;
+}
+
+function selectShowTag(tag) {
+  // Tapping the active tag again clears the selection.
+  newShowSelectedTag = (newShowSelectedTag === tag) ? null : tag;
+  document.querySelectorAll('.series-tag').forEach(b =>
+    b.classList.toggle('active', b.dataset.series === newShowSelectedTag));
+
+  const input = $('newShowTitle');
+  const preview = $('newShowPreview');
+  const isSeries = newShowSelectedTag && newShowSelectedTag !== 'other';
+  if (isSeries) {
+    input.style.display = 'none';
+    preview.style.display = 'block';
+    preview.innerHTML = `<span class="series-preview-k">New show</span>${esc(seriesTitle(newShowSelectedTag))}`;
+  } else {
+    preview.style.display = 'none';
+    input.style.display = 'block';
+    if (newShowSelectedTag === 'other') { input.value = ''; input.focus(); }
+  }
+}
+
 function renderLiveLobby(shows) {
   stopLiveTimer();
   currentShow = null;
+  newShowSelectedTag = null;
   let list;
   if (shows.length > 0) {
     list = '<div class="session-list">' + shows.map(s => {
@@ -2284,7 +2359,13 @@ function renderLiveLobby(shows) {
         </div>
         <div class="field">
           <label>Show Title</label>
+          <div class="series-tags">
+            <button type="button" class="series-tag" data-series="Bootleg Weekly" onclick="selectShowTag('Bootleg Weekly')">Bootleg Weekly</button>
+            <button type="button" class="series-tag" data-series="Fiesta Friday" onclick="selectShowTag('Fiesta Friday')">Fiesta Friday</button>
+            <button type="button" class="series-tag" data-series="other" onclick="selectShowTag('other')">Other</button>
+          </div>
           <input type="text" id="newShowTitle" placeholder="e.g. Fiesta Friday" onkeydown="if(event.key==='Enter')createShow()">
+          <div id="newShowPreview" class="series-preview" style="display:none;"></div>
         </div>
         <div class="field">
           <label>YouTube URL <span style="color:var(--text-dimmer);">(optional)</span></label>
@@ -2296,7 +2377,9 @@ function renderLiveLobby(shows) {
 }
 
 async function createShow() {
-  const title = ($('newShowTitle').value || '').trim();
+  // A series tag composes the title; otherwise use whatever's in the field.
+  const isSeries = newShowSelectedTag && newShowSelectedTag !== 'other';
+  const title = isSeries ? seriesTitle(newShowSelectedTag) : ($('newShowTitle').value || '').trim();
   const url = ($('newShowUrl').value || '').trim();
   if (!title) { toast('Enter a show title'); return; }
   const d = await api('POST', '/api/shows', {title, youtube_url: url});
