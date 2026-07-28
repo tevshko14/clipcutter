@@ -1133,6 +1133,13 @@
     line-height: 1.5;
   }
   .live-newshow .field { margin-bottom: 0; }
+  .newshow-yt-btn {
+    width: 100%;
+    margin-top: 8px;
+    flex: 0 0 auto;
+    font-size: 11px;
+    padding: 8px 12px;
+  }
 
   /* Series quick-pick tags in the New Show panel */
   .series-tags {
@@ -2373,10 +2380,18 @@ function renderLiveLobby(shows) {
         <div class="field">
           <label>YouTube URL <span style="color:var(--text-dimmer);">(optional)</span></label>
           <input type="text" id="newShowUrl" placeholder="youtube.com/..." onkeydown="if(event.key==='Enter')createShow()">
+          <button type="button" class="btn-ghost btn-sm newshow-yt-btn" onclick="openYouTubeStreams()">&#8599; Open my YouTube streams</button>
         </div>
         <button class="btn-primary" onclick="createShow()">New show</button>
       </div>
     </div>`;
+}
+
+// Opens the channel's streams page in the default browser so the upcoming
+// stream's URL can be grabbed and pasted into the field above. Reuses the
+// http(s)-guarded open-url endpoint; fire-and-forget.
+function openYouTubeStreams() {
+  api('POST', '/api/open-url', {url: 'https://www.youtube.com/@Funofinvesting/streams'}).catch(() => {});
 }
 
 async function createShow() {
