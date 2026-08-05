@@ -244,6 +244,9 @@ def get_session_output_dir(session_id: str):
 
     out = OUTPUT_DIR / folder_name
     out.mkdir(parents=True, exist_ok=True)
+    # A ready-made "posted" subfolder to drag worked clips into, keeping the
+    # main folder to un-worked clips. Empty and idempotent; harmless if unused.
+    (out / "posted").mkdir(exist_ok=True)
     return out
 
 
