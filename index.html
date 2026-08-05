@@ -1941,14 +1941,6 @@
         <input type="number" id="settingsClipWindow" value="5" min="1" max="30">
         <div class="hint">Each Potential Clip becomes this much footage, centered on its timestamp.</div>
       </div>
-      <div class="field">
-        <label>Auto-trash after posting</label>
-        <label class="check-row">
-          <input type="checkbox" id="settingsAutoTrash">
-          <span>Move a clip's video files to the Trash when I mark it Posted</span>
-        </label>
-        <div class="hint">Off by default. Files go to the macOS Trash — recoverable, never permanently deleted — and you'll get an Undo. Un-posting never touches files.</div>
-      </div>
       <div class="modal-actions">
         <button class="btn-ghost btn-sm" onclick="closeSettings()">Cancel</button>
         <button class="btn-primary btn-sm" onclick="saveSettings()">Save</button>
@@ -2074,10 +2066,6 @@ function switchView(name) {
       snipcutStartFromPath(pendingData.path);
     }
   } catch(e) {}
-  try {
-    const config = await api('GET', '/api/config');
-    autoTrashEnabled = !!config.auto_trash_on_post;
-  } catch(e) {}
   loadLiveTab();
 })();
 
@@ -2127,6 +2115,7 @@ function renderClips(session) {
     <span class="clips-head-title">${esc(session.video_title || 'Session')}</span>
     <div style="display:flex;gap:8px;margin-left:auto;flex-shrink:0;">
       ${hasDupes ? `<button class="btn-ghost btn-sm" onclick="openMergeClipsModal()" style="flex:0 0 auto;" title="Collapse near-duplicate clips">&#8646; Merge nearby</button>` : ''}
+      <button class="btn-ghost btn-sm" onclick="purgeSession('${session.id}')" style="flex:0 0 auto;" title="Trash clips not filed in the posted/ subfolder">&#128465; Purge</button>
       <button class="btn-ghost btn-sm" onclick="openSessionExportFolder('${session.id}')" style="flex:0 0 auto;">&#128193; Clips folder</button>
     </div>
   </div>`;
@@ -2282,66 +2271,22 @@ async function retryClip(clipId) {
   if (currentSessionId) { startPolling(currentSessionId); loadSession(currentSessionId); }
 }
 
-let autoTrashEnabled = false;      // mirrors config.auto_trash_on_post
-let trashConfirmedThisSession = false;
-
 // Flip a clip's "posted to social" label. Optimistic: update the button
 // immediately, persist, revert on failure. Pure bookkeeping — never touches
-// export/convert. The cache update keeps a poll-driven re-render consistent.
+// files; decluttering is the manual Purge action instead.
 async function togglePosted(clipId, btn) {
   const cached = clipDataCache[clipId];
   const desired = !(cached && cached.posted);
-
-  // Auto-trash is opt-in and only ever fires when turning Posted ON. Confirm
-  // the first time in an app session so a stray tap can't quietly bin a file.
-  if (desired && autoTrashEnabled && !trashConfirmedThisSession) {
-    const ok = confirm(
-      "Auto-trash is on.\n\nMarking this clip Posted will move its video files " +
-      "to the Trash (recoverable — you'll get an Undo).\n\nContinue?"
-    );
-    if (!ok) return;                           // nothing marked, nothing trashed
-    trashConfirmedThisSession = true;
-  }
-
   applyPostedState(btn, desired);
   if (cached) cached.posted = desired ? 1 : 0;
   try {
     const d = await api('POST', `/api/clips/${clipId}/posted`, {posted: desired});
     if (d.error) throw new Error(d.error);
-    if (d.trashed && d.trashed.length) toastUndoTrash(clipId, d.trashed);
   } catch (e) {
     applyPostedState(btn, !desired);           // revert
     if (cached) cached.posted = desired ? 0 : 1;
     toast('Could not save — try again');
   }
-}
-
-// Toast with a working Undo — the backend returns each file's path inside the
-// Trash, so restoring puts it back exactly where it was.
-function toastUndoTrash(clipId, trashed) {
-  const t = $('toast');
-  const label = trashed.length === 1
-    ? `Moved ${trashed[0].name} to Trash`
-    : `Moved ${trashed.length} files to Trash`;
-  clearTimeout(t._clearTimer);                 // cancel any pending text-wipe
-  t.classList.add('with-action');
-  t.innerHTML = '';
-  const msg = document.createElement('span');
-  msg.textContent = label;
-  const undo = document.createElement('button');
-  undo.className = 'toast-undo';
-  undo.textContent = 'Undo';
-  undo.onclick = async () => {
-    undo.disabled = true;
-    const d = await api('POST', `/api/clips/${clipId}/untrash`, {trashed});
-    // toast() replaces this toast outright — calling hideToast() first would
-    // schedule a cleanup that wipes the replacement's text 300ms later.
-    toast(d.restored ? 'Restored from Trash' : 'Could not restore — check the Trash');
-  };
-  t.append(msg, undo);
-  t.classList.add('show');
-  clearTimeout(t._hideTimer);
-  t._hideTimer = setTimeout(hideToast, 8000);
 }
 
 function hideToast() {
@@ -2359,6 +2304,23 @@ function applyPostedState(btn, on) {
   const star = btn.querySelector('.posted-star');
   if (star) star.innerHTML = on ? '&#9733;' : '&#9734;';
   btn.title = on ? 'Posted to social — click to unmark' : 'Mark as posted to social';
+}
+
+// Trash every clip in this session's output folder except what's filed in the
+// posted/ subfolder. Recoverable, with a working Undo.
+async function purgeSession(sessionId) {
+  if (!confirm(
+    "Purge this session's clips?\n\nEvery clip in the folder EXCEPT the ones you " +
+    "moved into the posted/ subfolder will go to the Trash (recoverable). Your " +
+    "posted/ folder is left untouched."
+  )) return;
+  const d = await api('POST', `/api/sessions/${sessionId}/purge`);
+  if (d.error) { toast(d.error); return; }
+  if (!d.purged) { toast('Nothing to purge — folder already clean'); return; }
+  showUndoToast(`Purged ${d.purged} clip${d.purged === 1 ? '' : 's'} to Trash`, async () => {
+    const u = await api('POST', `/api/sessions/${sessionId}/purge/undo`, {undo: d.undo});
+    toast(u.restored ? 'Purge undone' : 'Could not undo — check the Trash');
+  });
 }
 
 async function openSessionExportFolder(sessionId) {
@@ -3410,8 +3372,6 @@ async function openSettings() {
   try {
     const config = await api('GET', '/api/config');
     $('settingsClipWindow').value = config.default_clip_window || 5;
-    $('settingsAutoTrash').checked = !!config.auto_trash_on_post;
-    autoTrashEnabled = !!config.auto_trash_on_post;
   } catch(e) {}
   $('settingsModal').classList.add('show');
 }
@@ -3422,12 +3382,9 @@ function closeSettings() {
 
 async function saveSettings() {
   try {
-    const autoTrash = $('settingsAutoTrash').checked;
     await api('PUT', '/api/config', {
       default_clip_window: parseInt($('settingsClipWindow').value) || 5,
-      auto_trash_on_post: autoTrash,
     });
-    autoTrashEnabled = autoTrash;
     closeSettings();
     toast('Settings saved');
   } catch(e) { toast('Failed to save settings'); }

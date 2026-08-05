@@ -630,8 +630,6 @@ def api_update_config():
     for key in ["default_clip_window", "output_dir"]:
         if key in data:
             config[key] = data[key]
-    if "auto_trash_on_post" in data:
-        config["auto_trash_on_post"] = bool(data["auto_trash_on_post"])
     save_config(config)
     return jsonify({"ok": True})
 
@@ -847,47 +845,19 @@ def api_retry_clip(clip_id):
 
 @app.route("/api/clips/<clip_id>/posted", methods=["POST"])
 def api_set_clip_posted(clip_id):
-    """User-set 'posted to social' label. Pure bookkeeping — nothing in the
-    clip pipeline reads it; it only feeds the raw/posted counts in the UI.
-
-    Optionally (auto_trash_on_post, default off) moves this clip's own video
-    files to the OS trash on a genuine not-posted -> posted flip. Un-posting
-    never touches files. The DB paths are intentionally left untouched so a
-    restore puts the files back exactly where they were."""
+    """User-set 'posted to social' label. Pure bookkeeping — nothing reads it
+    except the raw/posted counts in the UI, and it never touches files.
+    Decluttering the output folder is the manual Purge action instead."""
     posted = 1 if (request.json or {}).get("posted") else 0
     conn = get_db()
     try:
-        clip = row_to_dict(conn.execute(
-            "SELECT id, posted, raw_file, export_file FROM clips WHERE id = ?", (clip_id,)
-        ).fetchone())
-        if not clip:
-            return jsonify({"error": "Clip not found"}), 404
-        conn.execute("UPDATE clips SET posted = ? WHERE id = ?", (posted, clip_id))
+        cur = conn.execute("UPDATE clips SET posted = ? WHERE id = ?", (posted, clip_id))
         conn.commit()
     finally:
         conn.close()
-
-    # Trash only on a real false -> true transition, and only for this clip.
-    # Failures here must never fail the request: the label is already saved.
-    trashed = []
-    became_posted = posted == 1 and not clip["posted"]
-    if became_posted and load_config().get("auto_trash_on_post"):
-        for original in (clip["export_file"], clip["raw_file"]):
-            in_trash = _trash_file(original)
-            if in_trash:
-                trashed.append({"original": original, "trashed": in_trash,
-                                "name": Path(original).name})
-
-    return jsonify({"ok": True, "posted": bool(posted), "trashed": trashed})
-
-
-@app.route("/api/clips/<clip_id>/untrash", methods=["POST"])
-def api_untrash_clip(clip_id):
-    """Undo the auto-trash for one clip — restores each file from the trash."""
-    items = (request.json or {}).get("trashed") or []
-    restored = sum(1 for it in items
-                   if _restore_from_trash(it.get("trashed", ""), it.get("original", "")))
-    return jsonify({"ok": True, "restored": restored})
+    if cur.rowcount == 0:
+        return jsonify({"error": "Clip not found"}), 404
+    return jsonify({"ok": True, "posted": bool(posted)})
 
 @app.route("/api/clips/<clip_id>", methods=["DELETE"])
 def api_delete_clip(clip_id):
@@ -1066,6 +1036,32 @@ def api_merge_session_clips_undo(session_id):
             conn.execute("DELETE FROM clips WHERE id=?", (mid,))
             restored += 1
         conn.commit()
+    return jsonify({"ok": True, "restored": restored})
+
+
+@app.route("/api/sessions/<session_id>/purge", methods=["POST"])
+def api_purge_session(session_id):
+    """Move to the Trash every clip file sitting directly in the session's
+    output folder — i.e. everything the user hasn't filed into the posted/
+    subfolder. Recoverable; returns undo data. posted/ and its contents, and
+    any other subfolder, are left untouched (only top-level video files go)."""
+    out_dir = get_session_output_dir(session_id)      # also guarantees posted/ exists
+    trashed = []
+    for entry in sorted(out_dir.iterdir()):
+        if entry.is_file() and entry.suffix.lower() in SUPPORTED_VIDEO_EXTS:
+            t = _trash_file(str(entry))
+            if t:
+                trashed.append({"original": str(entry), "trashed": t})
+    log.info("Purged session %s: %d file(s) to trash (posted/ kept)", session_id, len(trashed))
+    return jsonify({"ok": True, "purged": len(trashed), "undo": trashed})
+
+
+@app.route("/api/sessions/<session_id>/purge/undo", methods=["POST"])
+def api_purge_session_undo(session_id):
+    """Restore purged clip files from the trash to the session folder."""
+    items = (request.json or {}).get("undo") or []
+    restored = sum(1 for it in items
+                   if _restore_from_trash(it.get("trashed", ""), it.get("original", "")))
     return jsonify({"ok": True, "restored": restored})
 
 
