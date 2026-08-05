@@ -1664,6 +1664,18 @@
     padding: 1px 5px;
   }
   .hist-cal-day.selected .day-count { color: #fff; background: rgba(255,255,255,0.25); }
+  /* Stream happened but nothing posted yet — muted so it doesn't read as a win */
+  .hist-cal-day .day-count.zero { color: var(--text-dimmer); background: var(--surface-3); }
+  .hist-cal-day.selected .day-count.zero { color: rgba(255,255,255,0.7); background: rgba(255,255,255,0.15); }
+  .hist-cal-legend {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    margin-top: 14px;
+    font-family: var(--mono);
+    font-size: 10px;
+    color: var(--text-dimmer);
+  }
 
   /* Detail panel beside the calendar */
   .hist-panel {
@@ -3257,6 +3269,13 @@ function histSummary(list) {
   return `${list.length} run${list.length === 1 ? '' : 's'} · ${clips} clips`;
 }
 
+// Posted clips across a day's items — the calendar badge and the trend signal.
+function dayPosted(list) {
+  return list.reduce((n, i) => n +
+    (i.kind === 'show' ? (i.data.posted_count || 0)
+                       : (i.data.clips || []).filter(c => c.posted).length), 0);
+}
+
 function renderHistoryCalendar(items) {
   const byDay = {};
   items.forEach(i => { const k = dayKey(i.date); (byDay[k] = byDay[k] || []).push(i); });
@@ -3279,16 +3298,22 @@ function renderHistoryCalendar(items) {
   for (let i = 0; i < firstDay; i++) html += '<div></div>';
   for (let d = 1; d <= daysInMonth; d++) {
     const iso = `${year}-${String(month+1).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
-    const has = (byDay[iso] || []).length > 0;
+    const dayItems = byDay[iso] || [];
+    const has = dayItems.length > 0;
+    const posted = dayPosted(dayItems);
     const sel = histSelectedDay === iso;
+    const badgeTitle = has ? `${posted} posted clip${posted === 1 ? '' : 's'}` : '';
     html += `
       <button class="hist-cal-day ${has ? 'has-items' : ''} ${sel ? 'selected' : ''} ${iso === todayKey ? 'today' : ''}"
+        title="${badgeTitle}"
         onclick="histSelectedDay = ${sel ? 'null' : `'${iso}'`}; loadHistory()">
         <span>${d}</span>
-        ${has ? `<span class="day-count">${(byDay[iso] || []).length}</span>` : ''}
+        ${has ? `<span class="day-count${posted === 0 ? ' zero' : ''}">${posted}</span>` : ''}
       </button>`;
   }
-  html += '</div></div>';
+  html += '</div>';
+  html += `<div class="hist-cal-legend"><span class="day-count" style="position:static;">#</span> posted clips from that day's stream</div>`;
+  html += '</div>';
   return html;
 }
 
