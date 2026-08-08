@@ -261,6 +261,9 @@
     flex: 1;
   }
   .btn-ghost:hover { color: #fff; border-color: #3c3c45; }
+  /* Retry-all stands out when clips have failed */
+  .retry-all-btn { color: var(--accent-text); border-color: var(--accent-glow-strong); }
+  .retry-all-btn:hover { color: #fff; border-color: var(--accent); background: var(--accent-glow); }
 
   .btn-primary {
     background: var(--accent);
@@ -2126,6 +2129,7 @@ function renderClips(session) {
     ${currentSessionShowId ? `<button class="btn-ghost btn-sm" onclick="backToShow()" style="flex:0 0 auto;">&larr; Show</button>` : ''}
     <span class="clips-head-title">${esc(session.video_title || 'Session')}</span>
     <div style="display:flex;gap:8px;margin-left:auto;flex-shrink:0;">
+      ${errorCount ? `<button class="btn-ghost btn-sm retry-all-btn" onclick="retryAllFailed('${session.id}')" style="flex:0 0 auto;" title="Retry every failed clip">&#8635; Retry ${errorCount} failed</button>` : ''}
       ${hasDupes ? `<button class="btn-ghost btn-sm" onclick="openMergeClipsModal()" style="flex:0 0 auto;" title="Collapse near-duplicate clips">&#8646; Merge nearby</button>` : ''}
       <button class="btn-ghost btn-sm" onclick="purgeSession('${session.id}')" style="flex:0 0 auto;" title="Trash clips not filed in the posted/ subfolder">&#128465; Purge</button>
       <button class="btn-ghost btn-sm" onclick="openSessionExportFolder('${session.id}')" style="flex:0 0 auto;">&#128193; Clips folder</button>
@@ -2281,6 +2285,16 @@ async function retryClip(clipId) {
   await api('POST', `/api/clips/${clipId}/retry`);
   toast('Retrying clip');
   if (currentSessionId) { startPolling(currentSessionId); loadSession(currentSessionId); }
+}
+
+// Retry every failed clip in the session in one shot — they tend to fail as a
+// batch, so this beats clicking Retry on each.
+async function retryAllFailed(sessionId) {
+  const d = await api('POST', `/api/sessions/${sessionId}/retry-failed`);
+  if (d.error) { toast(d.error); return; }
+  toast(d.retried ? `Retrying ${d.retried} clip${d.retried === 1 ? '' : 's'}` : 'Nothing to retry');
+  startPolling(sessionId);
+  loadSession(sessionId);
 }
 
 // Flip a clip's "posted to social" label. Optimistic: update the button

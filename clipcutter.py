@@ -843,6 +843,22 @@ def api_retry_clip(clip_id):
     thread.start()
     return jsonify({"ok": True, "message": "Retry started"})
 
+@app.route("/api/sessions/<session_id>/retry-failed", methods=["POST"])
+def api_retry_failed_clips(session_id):
+    """Retry every failed clip in a session at once — they usually fail as a
+    batch (a stale URL, a stream still finalizing), so this saves clicking
+    Retry on each. Each clip re-runs on its own worker, same as a single retry."""
+    conn = get_db()
+    try:
+        ids = [r["id"] for r in conn.execute(
+            "SELECT id FROM clips WHERE session_id = ? AND status = 'error'",
+            (session_id,)).fetchall()]
+    finally:
+        conn.close()
+    for clip_id in ids:
+        threading.Thread(target=retry_clip, args=(clip_id,), daemon=True).start()
+    return jsonify({"ok": True, "retried": len(ids)})
+
 @app.route("/api/clips/<clip_id>/posted", methods=["POST"])
 def api_set_clip_posted(clip_id):
     """User-set 'posted to social' label. Pure bookkeeping — nothing reads it
