@@ -159,6 +159,7 @@ def init_db():
             started_at TEXT,
             ended_at TEXT,
             generated_session_id TEXT DEFAULT '',
+            timestamps_added INTEGER DEFAULT 0,
             created_at TEXT DEFAULT CURRENT_TIMESTAMP
         );
 
@@ -173,6 +174,15 @@ def init_db():
         CREATE INDEX IF NOT EXISTS idx_show_entries_show
             ON show_entries(show_id, elapsed_seconds);
     """)
+    conn.commit()
+
+    # Migration for existing shows tables (the CREATE above only adds the column
+    # to brand-new databases). Idempotent.
+    try:
+        conn.execute("ALTER TABLE shows ADD COLUMN timestamps_added INTEGER DEFAULT 0")
+    except sqlite3.OperationalError as e:
+        if "duplicate column name" not in str(e):
+            raise
     conn.commit()
 
     conn.close()

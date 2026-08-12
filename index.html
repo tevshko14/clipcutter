@@ -1541,6 +1541,28 @@
     line-height: 1.5;
   }
 
+  /* "Timestamps added to YouTube" confirmation gate */
+  .ts-gate {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 14px;
+    padding: 11px 14px;
+    border-radius: 8px;
+    background: var(--yellow-dim);
+    border: 1px solid var(--yellow-border);
+    font-size: 13px;
+    color: var(--text);
+    cursor: pointer;
+  }
+  .ts-gate.done { background: var(--green-dim); border-color: var(--green-border); }
+  .ts-gate input[type="checkbox"] {
+    width: 16px; height: 16px;
+    accent-color: var(--green);
+    flex: 0 0 auto;
+    cursor: pointer;
+  }
+
   /* ── History calendar ── */
   .hist-head {
     display: flex;
@@ -1971,6 +1993,17 @@
       <div class="modal-actions">
         <button class="btn-ghost btn-sm" onclick="closeMergeModal()">Cancel</button>
         <button class="btn-primary btn-sm" onclick="confirmMergeGetClips()">Get Clips</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Add-timestamps reminder (shown after ending a show) -->
+  <div class="modal-overlay" id="tsReminderModal">
+    <div class="modal">
+      <div class="modal-title">Add timestamps to YouTube</div>
+      <div id="tsReminderBody"></div>
+      <div class="modal-actions">
+        <button class="btn-primary btn-sm" onclick="closeTsReminder()">Got it</button>
       </div>
     </div>
   </div>
@@ -2661,7 +2694,10 @@ async function endShow() {
   const d = await api('POST', `/api/shows/${currentShow.id}/end`);
   if (d.error) { toast(d.error); return; }
   livePendingCapture = { timestamp: null, clip: null };
-  openShow(currentShow.id);
+  await openShow(currentShow.id);
+  // Nudge to add timestamps to YouTube — only if any were captured and not yet
+  // confirmed. Get Clips stays locked until confirmed in the ended view.
+  if (clipsGated()) showTimestampsReminder();
 }
 
 function renderShowLive() {
@@ -2824,6 +2860,7 @@ function renderShowEnded() {
   const s = currentShow;
   const clipCount = (s.entries || []).filter(e => e.type === 'clip').length;
   const tsCount = (s.entries || []).filter(e => e.type === 'timestamp').length;
+  const gated = tsCount > 0 && !s.timestamps_added;   // Get Clips locked until confirmed
   liveClipsFile = '';
   const copyBtn = `<button class="btn-ghost btn-sm" onclick="copyShowTimestamps()" style="flex:0 0 auto;font-size:12px;padding:6px 11px;">&#128203; Copy Timestamps</button>`;
   $('liveContent').innerHTML = `
@@ -2856,10 +2893,17 @@ function renderShowEnded() {
       <div id="clipsSourceUrl" style="display:${liveClipsSource === 'url' ? 'block' : 'none'};">
         <input type="text" id="clipsUrlInput" value="${esc(s.youtube_url || '')}" placeholder="https://www.youtube.com/watch?v=..." style="font-size:12.5px;margin-bottom:16px;">
       </div>
+      ${tsCount > 0 ? `
+      <label class="ts-gate${s.timestamps_added ? ' done' : ''}">
+        <input type="checkbox" ${s.timestamps_added ? 'checked' : ''} onchange="toggleTimestampsAdded(this.checked)">
+        <span>I've added the ${tsCount} timestamp${tsCount === 1 ? '' : 's'} to YouTube</span>
+        <button class="btn-ghost btn-sm" onclick="event.preventDefault(); copyShowTimestamps()" style="flex:0 0 auto;margin-left:auto;font-size:11px;padding:4px 9px;">&#128203; Copy</button>
+      </label>` : ''}
       <div class="live-getclips-run">
-        <button class="btn-primary" onclick="getShowClips()">&#9986; Get Clips</button>
+        <button class="btn-primary" id="getClipsBtn" onclick="getShowClips()" ${gated ? 'disabled' : ''}>&#9986; Get Clips</button>
         <label class="live-offset">offset <input type="number" id="clipsOffsetInput" value="0" step="1"> sec</label>
       </div>
+      <div id="tsGateHint" class="live-getclips-note" style="display:${gated ? 'flex' : 'none'};"><span style="color:var(--yellow);">&#128274;</span><span>Locked until you add the timestamps to YouTube and tick the box above.</span></div>
       ${s.generated_session_id ? `<div class="live-getclips-note"><span style="color:var(--yellow);">&#9888;</span><span>Clips already generated once for this show. <a href="#" onclick="viewGeneratedSession('${s.generated_session_id}'); return false;" style="color:var(--accent-text);font-weight:600;">View session</a> — running again creates a new one.</span></div>` : ''}
       `}
     </div>
@@ -2907,13 +2951,62 @@ function clusterClipTaps() {
   return clusters;
 }
 
+// True when clips must stay locked: the show has timestamps and they haven't
+// been confirmed as added to YouTube.
+function clipsGated() {
+  const s = currentShow;
+  const tsCount = (s.entries || []).filter(e => e.type === 'timestamp').length;
+  return tsCount > 0 && !s.timestamps_added;
+}
+
 // Validate the source, then either surface merge suggestions or extract.
 function getShowClips() {
+  if (clipsGated()) { toast('Add your timestamps to YouTube and tick the box first'); showTimestampsReminder(); return; }
   if (liveClipsSource === 'local' && !liveClipsFile) { toast('Browse to your recording first'); return; }
   if (liveClipsSource === 'url' && !($('clipsUrlInput').value || '').trim()) { toast('Enter the YouTube URL'); return; }
   const clusters = clusterClipTaps();
   if (clusters.some(c => c.length > 1)) { openMergeModal(clusters); return; }
   runGetClips(null);
+}
+
+// Persist the "timestamps added to YouTube" confirmation and lock/unlock Get
+// Clips in place (no full re-render, so a typed URL isn't lost).
+async function toggleTimestampsAdded(checked) {
+  currentShow.timestamps_added = checked ? 1 : 0;
+  const gated = clipsGated();
+  const btn = $('getClipsBtn'); if (btn) btn.disabled = gated;
+  const hint = $('tsGateHint'); if (hint) hint.style.display = gated ? 'flex' : 'none';
+  const label = document.querySelector('.ts-gate'); if (label) label.classList.toggle('done', !!checked);
+  try {
+    const d = await api('PUT', `/api/shows/${currentShow.id}`, {timestamps_added: checked});
+    if (d.error) throw new Error(d.error);
+  } catch (e) { toast('Could not save — try again'); }
+}
+
+// Reminder shown right after a show ends: nudge to add timestamps to YouTube.
+function showTimestampsReminder() {
+  const s = currentShow;
+  const tsCount = (s.entries || []).filter(e => e.type === 'timestamp').length;
+  if (tsCount === 0) return;
+  $('tsReminderBody').innerHTML = `
+    <div style="font-size:13px;color:var(--text-dim);line-height:1.55;margin-bottom:16px;">
+      You captured <strong style="color:var(--text);">${tsCount} timestamp${tsCount === 1 ? '' : 's'}</strong> for this stream.
+      Add them to the video's description on YouTube (chapters), then tick
+      <em>“I've added the timestamps to YouTube”</em> to unlock Get Clips.
+    </div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;">
+      <button class="btn-ghost btn-sm" onclick="copyShowTimestamps()" style="flex:0 0 auto;">&#128203; Copy Timestamps</button>
+      ${s.youtube_url ? `<button class="btn-ghost btn-sm" onclick="openYouTubeVideo()" style="flex:0 0 auto;">&#8599; Open YouTube</button>` : ''}
+    </div>`;
+  $('tsReminderModal').classList.add('show');
+}
+
+function closeTsReminder() { $('tsReminderModal').classList.remove('show'); }
+
+function openYouTubeVideo() {
+  const url = ((currentShow && currentShow.youtube_url) || '').trim();
+  if (url) api('POST', '/api/open-url', {url}).catch(() => {});
+  else toast('No YouTube URL saved on this show');
 }
 
 // mergeGroups: array of arrays of entry ids to combine, or null for no merging.
@@ -3438,6 +3531,9 @@ $('mergeModal').addEventListener('click', function(e) {
 });
 $('mergeClipsModal').addEventListener('click', function(e) {
   if (e.target === this) closeMergeClipsModal();
+});
+$('tsReminderModal').addEventListener('click', function(e) {
+  if (e.target === this) closeTsReminder();
 });
 </script>
 </body>

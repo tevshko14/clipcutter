@@ -1270,6 +1270,8 @@ def api_update_show(show_id):
         fields["title"] = data["title"].strip()[:200]
     if "youtube_url" in data:
         fields["youtube_url"] = (data["youtube_url"] or "").strip()
+    if "timestamps_added" in data:
+        fields["timestamps_added"] = 1 if data["timestamps_added"] else 0
     if not fields:
         return jsonify({"error": "Nothing to update"}), 400
     with with_db() as conn:
@@ -1415,11 +1417,21 @@ def api_show_get_clips(show_id):
             "WHERE show_id = ? AND type = 'clip' ORDER BY elapsed_seconds ASC",
             (show_id,)
         ).fetchall())
+        ts_count = conn.execute(
+            "SELECT COUNT(*) FROM show_entries WHERE show_id = ? AND type = 'timestamp'",
+            (show_id,)
+        ).fetchone()[0]
 
     if not show["ended_at"]:
         return jsonify({"error": "End the show first"}), 400
     if not clip_entries:
         return jsonify({"error": "No Potential Clips entries on this show"}), 400
+    # Hard lock: don't pull clips until the captured timestamps have been added
+    # to the YouTube video (a manual confirmation). Only gates shows that
+    # actually have timestamps to add.
+    if ts_count > 0 and not show.get("timestamps_added"):
+        return jsonify({"error": "Add your timestamps to YouTube first, then "
+                                 "confirm it below to unlock Get Clips."}), 409
 
     # Allow overriding the stored URL at get-clips time
     url = (data.get("youtube_url") or show.get("youtube_url") or "").strip()
