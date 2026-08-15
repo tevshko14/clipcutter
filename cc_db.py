@@ -79,6 +79,7 @@ def init_db():
             generated_title TEXT DEFAULT '',
             generated_description TEXT DEFAULT '',
             posted INTEGER DEFAULT 0,
+            rejected INTEGER DEFAULT 0,
             created_at TEXT DEFAULT CURRENT_TIMESTAMP
         );
 
@@ -132,6 +133,7 @@ def init_db():
         "ALTER TABLE clips ADD COLUMN generated_title TEXT DEFAULT ''",
         "ALTER TABLE clips ADD COLUMN generated_description TEXT DEFAULT ''",
         "ALTER TABLE clips ADD COLUMN posted INTEGER DEFAULT 0",
+        "ALTER TABLE clips ADD COLUMN rejected INTEGER DEFAULT 0",
         "ALTER TABLE clips ADD COLUMN suggestion_id TEXT DEFAULT ''",
         "ALTER TABLE clips ADD COLUMN trimmed_transcript TEXT DEFAULT ''",
         "ALTER TABLE sessions ADD COLUMN gather_phase TEXT DEFAULT ''",

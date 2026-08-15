@@ -727,7 +727,7 @@ def api_list_sessions():
         # Fetch all clips for all sessions in one query (avoid N+1)
         all_clips = rows_to_list(conn.execute(
             """SELECT id, session_id, note, status, final_start, final_end,
-                      window_seconds, export_file, generated_title, posted
+                      window_seconds, export_file, generated_title, posted, rejected
                FROM clips ORDER BY center_seconds"""
         ).fetchall())
 
@@ -784,7 +784,7 @@ def api_get_session(session_id):
                start_seconds, end_seconds, status, error_text, raw_file,
                ai_suggestion_start, ai_suggestion_end, ai_reasoning,
                final_start, final_end, export_file, created_at,
-               generated_title, generated_description, posted
+               generated_title, generated_description, posted, rejected
                FROM clips WHERE session_id = ? ORDER BY center_seconds""",
             (session_id,)
         ).fetchall())
@@ -861,19 +861,40 @@ def api_retry_failed_clips(session_id):
 
 @app.route("/api/clips/<clip_id>/posted", methods=["POST"])
 def api_set_clip_posted(clip_id):
-    """User-set 'posted to social' label. Pure bookkeeping — nothing reads it
-    except the raw/posted counts in the UI, and it never touches files.
-    Decluttering the output folder is the manual Purge action instead."""
+    """User-set 'posted to social' (accepted) label. Pure bookkeeping — feeds
+    the accept/reject counts in the UI, never touches files. Mutually exclusive
+    with rejected: posting a clip clears any reject."""
     posted = 1 if (request.json or {}).get("posted") else 0
     conn = get_db()
     try:
-        cur = conn.execute("UPDATE clips SET posted = ? WHERE id = ?", (posted, clip_id))
+        # posted=1 clears rejected; unposting leaves rejected as-is (it's 0 anyway)
+        cur = conn.execute(
+            "UPDATE clips SET posted = ?, rejected = CASE WHEN ? THEN 0 ELSE rejected END WHERE id = ?",
+            (posted, posted, clip_id))
         conn.commit()
     finally:
         conn.close()
     if cur.rowcount == 0:
         return jsonify({"error": "Clip not found"}), 404
     return jsonify({"ok": True, "posted": bool(posted)})
+
+@app.route("/api/clips/<clip_id>/rejected", methods=["POST"])
+def api_set_clip_rejected(clip_id):
+    """User-set 'rejected' label — a clip you decided not to post. Mutually
+    exclusive with posted: rejecting a clip clears any post. Never touches
+    files; decluttering is the manual Purge action instead."""
+    rejected = 1 if (request.json or {}).get("rejected") else 0
+    conn = get_db()
+    try:
+        cur = conn.execute(
+            "UPDATE clips SET rejected = ?, posted = CASE WHEN ? THEN 0 ELSE posted END WHERE id = ?",
+            (rejected, rejected, clip_id))
+        conn.commit()
+    finally:
+        conn.close()
+    if cur.rowcount == 0:
+        return jsonify({"error": "Clip not found"}), 404
+    return jsonify({"ok": True, "rejected": bool(rejected)})
 
 @app.route("/api/clips/<clip_id>", methods=["DELETE"])
 def api_delete_clip(clip_id):
@@ -1229,7 +1250,9 @@ def api_list_shows():
                    (SELECT COUNT(*) FROM clips c
                       WHERE c.session_id = s.generated_session_id) AS raw_clip_count,
                    (SELECT COUNT(*) FROM clips c
-                      WHERE c.session_id = s.generated_session_id AND c.posted = 1) AS posted_count
+                      WHERE c.session_id = s.generated_session_id AND c.posted = 1) AS posted_count,
+                   (SELECT COUNT(*) FROM clips c
+                      WHERE c.session_id = s.generated_session_id AND c.rejected = 1) AS rejected_count
             FROM shows s
             LEFT JOIN show_entries e ON e.show_id = s.id
             GROUP BY s.id
@@ -1242,6 +1265,7 @@ def api_list_shows():
         r["clip_count"] = r["clip_count"] or 0
         r["raw_clip_count"] = r["raw_clip_count"] or 0
         r["posted_count"] = r["posted_count"] or 0
+        r["rejected_count"] = r["rejected_count"] or 0
     return jsonify({"shows": rows})
 
 
