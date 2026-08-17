@@ -307,6 +307,15 @@
   .clip-card.exported { border-left-color: var(--green); }
   .clip-card.error { border-left-color: var(--red); }
 
+  .clip-num {
+    font-family: var(--mono);
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text-dim);
+    flex: 0 0 auto;
+    min-width: 20px;
+    text-align: right;
+  }
   .clip-status {
     width: 9px; height: 9px;
     border-radius: 50%;
@@ -2199,8 +2208,9 @@ function renderClips(session) {
   </div>`;
 
   html += `<div class="clip-cards">`;
-  clips.forEach(c => {
+  clips.forEach((c, idx) => {
     html += `<div class="clip-card ${c.status}">
+      <span class="clip-num">${clipNumber(c, idx)}</span>
       <div class="clip-status ${c.status}"></div>
       <div class="clip-info">
         <div class="clip-note">${esc(c.note || 'Untitled clip')}</div>
@@ -2224,6 +2234,14 @@ function renderClips(session) {
   html += `</div>`;
 
   $('clipsContent').innerHTML = html;
+}
+
+// The number shown next to a clip, matching its exported filename (NN_note_raw
+// .mp4). Read straight from the export path so it stays correct after merges or
+// deletes; falls back to list position for clips not yet exported.
+function clipNumber(clip, idx) {
+  const m = (clip.export_file || '').split(/[\\/]/).pop().match(/^(\d+)_/);
+  return m ? m[1] : String(idx + 1).padStart(2, '0');
 }
 
 function fmtTime(sec) {
