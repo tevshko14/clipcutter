@@ -7,6 +7,7 @@ recording. No AI, no editing — extraction and conversion only.
 """
 
 import os
+import re
 import sys
 import json
 import shutil
@@ -97,28 +98,53 @@ app = Flask(__name__)
 
 # ---------- Clip Workers ----------
 
+_URL_RE = re.compile(r'https?://\S+')
+
+
+def _meaningful_error_line(output: str) -> str:
+    """Last human-readable error line from ffmpeg/yt-dlp output, with any URL
+    stripped — so the UI never shows a raw signed-URL fragment."""
+    lines = [ln.strip() for ln in (output or "").splitlines() if ln.strip()]
+    KEYS = ("error", "forbidden", "denied", "failed", "unavailable",
+            "not found", "no such", "unable", "cannot", "timed out")
+    for ln in reversed(lines):                       # prefer an explicit error line
+        cleaned = _URL_RE.sub("", ln).strip(" .:-")
+        if cleaned and any(k in ln.lower() for k in KEYS):
+            return cleaned[:200]
+    for ln in reversed(lines):                       # else last substantive non-URL line
+        cleaned = _URL_RE.sub("", ln).strip(" .:-")
+        if len(cleaned) > 8:
+            return cleaned[:200]
+    return "Failed — see the log for details"
+
+
 def _classify_download_error(output: str) -> str:
-    """Turn a yt-dlp/ffmpeg failure tail into a short, actionable message.
-    The raw output is often a giant URL fragment that means nothing to a user."""
+    """Turn a yt-dlp/ffmpeg failure into a short, actionable message. Raw output
+    is often a giant signed URL that means nothing to a user."""
     low = (output or "").lower()
     # "Invalid data / exit 183" on a live/DVR URL is almost always transient:
     # right after a stream ends, YouTube is still finalizing the recording and
     # its fragments can't be cut yet. It clears on its own within minutes.
-    # (Not a livestream limitation — live clipping works fine once finalized.)
     if ("invalid data found" in low or "exited with code 183" in low
             or "playlist_type/dvr" in low or "force_finished" in low):
-        return ("Couldn't cut this section yet. If the stream just ended, YouTube "
-                "is still finalizing it — wait a few minutes and Retry. Or use the "
-                "local recording (Get Clips → Local recording).")
+        return ("Couldn't cut this yet — if the stream just ended, YouTube is still "
+                "finalizing it. Wait a few minutes and Retry, or use the local recording.")
+    if "403" in low and ("forbidden" in low or "access denied" in low):
+        return ("YouTube blocked the download (rate-limit or access). Wait ~15–30 min "
+                "and Retry a few at a time, or use the local recording.")
     if "http error 429" in low or "too many requests" in low:
         return "YouTube rate-limited the download. Wait a few minutes and Retry, or use the local recording."
+    if "n challenge" in low or "javascript runtime" in low or "jsinterp" in low:
+        return "YouTube's download needs a JavaScript runtime (install Deno), or use the local recording."
     if "video unavailable" in low or "private video" in low or "members-only" in low:
         return "This video isn't downloadable (private, members-only, or removed). Use the local recording."
     if "requested format is not available" in low:
         return "No HD format available for this video. Use the local recording."
-    # Fall back to the raw tail, but keep it short.
-    tail = (output or "Download failed").strip()
-    return tail[-300:]
+    if "no space left" in low:
+        return "Ran out of disk space. Free some up and Retry."
+    if "no such file" in low or "does not exist" in low or "permission denied" in low:
+        return "Source file not found or unreadable — re-check the recording."
+    return _meaningful_error_line(output)
 
 
 def download_clip(clip_id: str, url: str):
@@ -235,7 +261,7 @@ def extract_clip_local(clip_id: str, source_path: str):
             conn.close()
             _finish_clip(clip_id, clip["session_id"])
         else:
-            error_msg = (result.stderr or "ffmpeg extraction failed")[-300:]
+            error_msg = _classify_download_error(result.stderr or "ffmpeg extraction failed")
             conn.execute(
                 "UPDATE clips SET status = 'error', error_text = ? WHERE id = ?",
                 (error_msg, clip_id)
@@ -317,11 +343,11 @@ def export_clip(clip_id: str):
                 (str(output_path), clip_id)
             )
         else:
-            error_msg = result.stderr[-500:] if result.stderr else "ffmpeg export failed"
-            log.error("Export failed: %s", error_msg)
+            log.error("Export failed: %s", (result.stderr or "")[-500:])
+            error_msg = _classify_download_error(result.stderr or "ffmpeg export failed")
             conn.execute(
                 "UPDATE clips SET status = 'error', error_text = ? WHERE id = ?",
-                (f"Export failed: {error_msg[:400]}", clip_id)
+                (f"Export failed — {error_msg}", clip_id)
             )
         conn.commit()
     except subprocess.TimeoutExpired:

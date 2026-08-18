@@ -375,10 +375,9 @@
   .clip-error {
     font-size: 11px;
     color: var(--red);
-    margin-top: 2px;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
+    margin-top: 4px;
+    line-height: 1.45;
+    max-width: 460px;
   }
   .clip-actions { display: flex; gap: 6px; flex-shrink: 0; align-items: center; }
 
@@ -2215,7 +2214,7 @@ function renderClips(session) {
       <div class="clip-info">
         <div class="clip-note">${esc(c.note || 'Untitled clip')}</div>
         <div class="clip-meta">${c.center_hms} &middot; ${c.duration_min}m window &middot; ${c.start_hms} → ${c.end_hms}</div>
-        ${c.status === 'error' && c.error_text ? `<div class="clip-error">${esc(c.error_text.slice(0, 80))}</div>` : ''}
+        ${c.status === 'error' && c.error_text ? `<div class="clip-error">${esc(c.error_text.slice(0, 200))}</div>` : ''}
       </div>
       <div class="clip-actions">
         <div class="clip-badge ${c.status}">${esc(CLIP_STATUS_LABELS[c.status] || c.status)}</div>
