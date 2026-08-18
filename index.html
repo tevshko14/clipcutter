@@ -198,7 +198,7 @@
     margin-bottom: 6px;
   }
 
-  input[type="text"], input[type="number"], input[type="password"], textarea {
+  input[type="text"], input[type="number"], input[type="password"], textarea, select {
     width: 100%;
     background: var(--input-bg);
     border: 1px solid #2a2a32;
@@ -210,7 +210,8 @@
     outline: none;
     transition: border-color 0.2s, box-shadow 0.2s;
   }
-  input:hover, textarea:hover { border-color: var(--border-hover); }
+  select { cursor: pointer; appearance: none; -webkit-appearance: none; }
+  input:hover, textarea:hover, select:hover { border-color: var(--border-hover); }
   input:focus, textarea:focus {
     border-color: var(--accent);
     box-shadow: 0 0 0 3px var(--accent-glow);
@@ -2008,6 +2009,18 @@
         <input type="number" id="settingsClipWindow" value="5" min="1" max="30">
         <div class="hint">Each Potential Clip becomes this much footage, centered on its timestamp.</div>
       </div>
+      <div class="field">
+        <label>YouTube login (cookies)</label>
+        <select id="settingsCookiesBrowser">
+          <option value="">Off</option>
+          <option value="chrome">Chrome</option>
+          <option value="safari">Safari</option>
+          <option value="firefox">Firefox</option>
+          <option value="edge">Edge</option>
+          <option value="brave">Brave</option>
+        </select>
+        <div class="hint">Authenticates YouTube downloads with your browser login — fixes the "confirm you're not a bot" / rate-limit blocks. Pick the browser you're signed into YouTube on. macOS may prompt once for keychain access. Local-recording pulls don't use this.</div>
+      </div>
       <div class="modal-actions">
         <button class="btn-ghost btn-sm" onclick="closeSettings()">Cancel</button>
         <button class="btn-primary btn-sm" onclick="saveSettings()">Save</button>
@@ -3595,6 +3608,7 @@ async function openSettings() {
   try {
     const config = await api('GET', '/api/config');
     $('settingsClipWindow').value = config.default_clip_window || 5;
+    $('settingsCookiesBrowser').value = config.youtube_cookies_browser || '';
   } catch(e) {}
   $('settingsModal').classList.add('show');
 }
@@ -3607,6 +3621,7 @@ async function saveSettings() {
   try {
     await api('PUT', '/api/config', {
       default_clip_window: parseInt($('settingsClipWindow').value) || 5,
+      youtube_cookies_browser: $('settingsCookiesBrowser').value,
     });
     closeSettings();
     toast('Settings saved');

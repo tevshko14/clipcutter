@@ -30,6 +30,10 @@ SUPPORTED_VIDEO_EXTS = (".mp4", ".mkv", ".mov", ".webm", ".avi",
 DEFAULT_CONFIG = {
     "default_clip_window": 5,
     "output_dir": str(OUTPUT_DIR),
+    # Optional: pull YouTube cookies from this browser to authenticate
+    # downloads (fixes YouTube's "confirm you're not a bot" block). Empty =
+    # off. One of: chrome, safari, firefox, edge, brave.
+    "youtube_cookies_browser": "",
 }
 
 

@@ -56,12 +56,20 @@ def check_system_deps():
             missing.append("yt-dlp")
     return missing
 
+_COOKIE_BROWSERS = {"chrome", "safari", "firefox", "edge", "brave", "chromium", "opera", "vivaldi"}
+
+
 def get_ytdlp_cmd():
     """Return the correct command to invoke yt-dlp."""
     base = ["yt-dlp"] if shutil.which("yt-dlp") else [sys.executable, "-m", "yt_dlp"]
     # yt-dlp 2026+ requires a JS runtime + challenge solver for YouTube
     if shutil.which("node"):
         base += ["--js-runtimes", "node", "--remote-components", "ejs:github"]
+    # Optional: authenticate with the user's YouTube login. Bypasses YouTube's
+    # "confirm you're not a bot" / rate-limit blocks that otherwise 403 downloads.
+    browser = (load_config().get("youtube_cookies_browser") or "").strip().lower()
+    if browser in _COOKIE_BROWSERS:
+        base += ["--cookies-from-browser", browser]
     return base
 
 # HD-only format chain for every YouTube download. YouTube's pre-muxed
@@ -129,9 +137,16 @@ def _classify_download_error(output: str) -> str:
             or "playlist_type/dvr" in low or "force_finished" in low):
         return ("Couldn't cut this yet — if the stream just ended, YouTube is still "
                 "finalizing it. Wait a few minutes and Retry, or use the local recording.")
+    if "cookies" in low and any(k in low for k in ("could not", "unable", "failed to", "permission", "no such", "not found")):
+        return ("Couldn't read your browser cookies. Make sure that browser is signed "
+                "into YouTube and grant keychain access, or change the browser in Settings.")
+    if "sign in to confirm" in low or "not a bot" in low:
+        return ("YouTube wants a sign-in to confirm you're not a bot. Turn on YouTube "
+                "login (cookies) in Settings, or use the local recording.")
     if "403" in low and ("forbidden" in low or "access denied" in low):
         return ("YouTube blocked the download (rate-limit or access). Wait ~15–30 min "
-                "and Retry a few at a time, or use the local recording.")
+                "and Retry a few at a time, turn on YouTube login (cookies) in Settings, "
+                "or use the local recording.")
     if "http error 429" in low or "too many requests" in low:
         return "YouTube rate-limited the download. Wait a few minutes and Retry, or use the local recording."
     if "n challenge" in low or "javascript runtime" in low or "jsinterp" in low:
@@ -656,6 +671,9 @@ def api_update_config():
     for key in ["default_clip_window", "output_dir"]:
         if key in data:
             config[key] = data[key]
+    if "youtube_cookies_browser" in data:
+        b = (data["youtube_cookies_browser"] or "").strip().lower()
+        config["youtube_cookies_browser"] = b if b in _COOKIE_BROWSERS else ""
     save_config(config)
     return jsonify({"ok": True})
 
