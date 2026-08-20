@@ -17,8 +17,8 @@ DB_PATH = APP_DIR / "clipcutter.db"
 CONFIG_PATH = APP_DIR / "config.json"
 SESSIONS_DIR = APP_DIR / "sessions"
 SESSIONS_DIR.mkdir(exist_ok=True)
-OUTPUT_DIR = Path.home() / "ClipCutter_Clips"
-OUTPUT_DIR.mkdir(exist_ok=True)
+OUTPUT_DIR = Path.home() / "Desktop" / "ClipCutter Clips RAW"
+OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
 # Video file extensions accepted by SnipCut (input) and right-click "Open With".
 # The output is always CFR MP4 regardless of input codec.
