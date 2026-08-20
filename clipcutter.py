@@ -909,6 +909,42 @@ def api_retry_failed_clips(session_id):
         threading.Thread(target=retry_clip, args=(clip_id,), daemon=True).start()
     return jsonify({"ok": True, "retried": len(ids)})
 
+@app.route("/api/clips/<clip_id>/repull", methods=["POST"])
+def api_repull_clip(clip_id):
+    """Re-extract one clip at custom bounds (from X to Y) — for when the default
+    5-min window turned out too short. Updates the clip's start/end and re-runs
+    the download+export from the session's source, replacing the files. Reuses
+    the retry path (raw is cleared so it re-downloads with the new bounds)."""
+    data = request.json or {}
+    try:
+        start = max(0, int(data["start_seconds"]))
+        end = int(data["end_seconds"])
+    except (KeyError, TypeError, ValueError):
+        return jsonify({"error": "start_seconds and end_seconds are required"}), 400
+    if end <= start:
+        return jsonify({"error": "The end time must be after the start time"}), 400
+    if end - start > 3600:
+        return jsonify({"error": "A clip can't be longer than 60 minutes"}), 400
+    conn = get_db()
+    try:
+        clip = row_to_dict(conn.execute(
+            "SELECT id, session_id FROM clips WHERE id = ?", (clip_id,)).fetchone())
+        if not clip:
+            return jsonify({"error": "Clip not found"}), 404
+        sess = row_to_dict(conn.execute(
+            "SELECT youtube_url FROM sessions WHERE id = ?", (clip["session_id"],)).fetchone())
+        if not sess or not (sess.get("youtube_url") or "").strip():
+            return jsonify({"error": "This session has no YouTube URL to re-pull from."}), 400
+        conn.execute(
+            "UPDATE clips SET start_seconds=?, end_seconds=?, center_seconds=?, "
+            "window_seconds=?, raw_file='', status='downloading', error_text='' WHERE id=?",
+            (start, end, (start + end) // 2, end - start, clip_id))
+        conn.commit()
+    finally:
+        conn.close()
+    threading.Thread(target=retry_clip, args=(clip_id,), daemon=True).start()
+    return jsonify({"ok": True})
+
 @app.route("/api/clips/<clip_id>/posted", methods=["POST"])
 def api_set_clip_posted(clip_id):
     """User-set 'posted to social' (accepted) label. Pure bookkeeping — feeds

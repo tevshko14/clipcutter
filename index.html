@@ -2041,6 +2041,23 @@
     </div>
   </div>
 
+  <!-- Re-pull clip at custom bounds -->
+  <div class="modal-overlay" id="repullModal">
+    <div class="modal">
+      <div class="modal-title">Re-pull clip</div>
+      <div id="repullClipName" style="font-size:14px;font-weight:600;color:var(--text);margin-bottom:4px;"></div>
+      <div class="hint" style="margin-bottom:16px;">Set the exact range to re-extract from the source, then Re-pull. Replaces this clip's file. Use h:mm:ss.</div>
+      <div class="row">
+        <div class="field"><label>From</label><input type="text" id="repullFrom" placeholder="0:37:40"></div>
+        <div class="field"><label>Until</label><input type="text" id="repullUntil" placeholder="0:44:30"></div>
+      </div>
+      <div class="modal-actions">
+        <button class="btn-ghost btn-sm" onclick="closeRepull()">Cancel</button>
+        <button class="btn-primary btn-sm" onclick="confirmRepull()">&#8635; Re-pull</button>
+      </div>
+    </div>
+  </div>
+
   <!-- Add-timestamps reminder (shown after ending a show) -->
   <div class="modal-overlay" id="tsReminderModal">
     <div class="modal">
@@ -2240,6 +2257,7 @@ function renderClips(session) {
           title="${c.rejected ? 'Rejected — click to unmark' : 'Mark as rejected (decided not to post)'}">
           &#10007; Reject
         </button>
+        ${c.status === 'exported' ? `<button class="btn-ghost btn-sm" onclick="event.stopPropagation(); openRepull('${c.id}')" style="flex:0 0 auto;padding:5px 10px;font-size:11px;" title="Re-pull this clip at custom start/end (e.g. if 5 min was too short)">&#8596; Adjust</button>` : ''}
         ${c.status === 'error' ? `<button class="btn-ghost btn-sm" onclick="event.stopPropagation(); retryClip('${c.id}')" style="flex:0 0 auto;padding:5px 12px;font-size:11px;">Retry</button>` : ''}
       </div>
     </div>`;
@@ -2385,6 +2403,35 @@ async function retryAllFailed(sessionId) {
   toast(d.retried ? `Retrying ${d.retried} clip${d.retried === 1 ? '' : 's'}` : 'Nothing to retry');
   startPolling(sessionId);
   loadSession(sessionId);
+}
+
+// --- Re-pull a clip at custom bounds (when the default window was too short) ---
+let repullClipId = null;
+
+function openRepull(clipId) {
+  const c = clipDataCache[clipId];
+  if (!c) return;
+  repullClipId = clipId;
+  $('repullClipName').textContent = c.note || 'Untitled clip';
+  $('repullFrom').value = c.start_hms || fmtHMS(c.start_seconds || 0);
+  $('repullUntil').value = c.end_hms || fmtHMS(c.end_seconds || 0);
+  $('repullModal').classList.add('show');
+}
+
+function closeRepull() { $('repullModal').classList.remove('show'); repullClipId = null; }
+
+async function confirmRepull() {
+  const start = parseHMS($('repullFrom').value);
+  const end = parseHMS($('repullUntil').value);
+  if (start === null || end === null) { toast('Times must be h:mm:ss (or mm:ss)'); return; }
+  if (end <= start) { toast('Until must be after From'); return; }
+  const id = repullClipId, sid = currentSessionId;
+  closeRepull();
+  const d = await api('POST', `/api/clips/${id}/repull`, {start_seconds: start, end_seconds: end});
+  if (d.error) { toast(d.error); return; }
+  toast('Re-pulling clip…');
+  startPolling(sid);
+  loadSession(sid);
 }
 
 // Flip a clip's "posted to social" label. Optimistic: update the button
@@ -3647,6 +3694,9 @@ $('mergeClipsModal').addEventListener('click', function(e) {
 });
 $('tsReminderModal').addEventListener('click', function(e) {
   if (e.target === this) closeTsReminder();
+});
+$('repullModal').addEventListener('click', function(e) {
+  if (e.target === this) closeRepull();
 });
 </script>
 </body>
