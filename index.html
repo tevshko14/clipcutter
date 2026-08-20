@@ -2035,7 +2035,8 @@
       <div id="mergeModalBody"></div>
       <div class="modal-actions">
         <button class="btn-ghost btn-sm" onclick="closeMergeModal()">Cancel</button>
-        <button class="btn-primary btn-sm" onclick="confirmMergeGetClips()">Get Clips</button>
+        <button class="btn-ghost btn-sm" onclick="skipMergeGetClips()" title="Ignore all suggestions and pull every clip separately">Don't merge</button>
+        <button class="btn-primary btn-sm" onclick="confirmMergeGetClips()">Merge &amp; Get Clips</button>
       </div>
     </div>
   </div>
@@ -3156,6 +3157,12 @@ function confirmMergeGetClips() {
   });
   closeMergeModal();
   runGetClips(groups);
+}
+
+// Bulk-ignore: skip every merge suggestion and pull all clips separately.
+function skipMergeGetClips() {
+  closeMergeModal();
+  runGetClips(null);
 }
 
 function viewGeneratedSession(sessionId) {

@@ -708,9 +708,15 @@ def _build_clip_specs(clip_entries, merge_groups, offset, duration):
             n = (e["note"] or "").strip()
             if n and n not in notes:
                 notes.append(n)
+        # A merged clip spans the union: each tap keeps its ±half-window, so the
+        # clip runs from (first tap - half) to (last tap + half). That means the
+        # duration grows by the span between the outermost taps. A single tap
+        # keeps the plain window.
+        span = max(secs) - min(secs)
+        clip_dur = duration + span if len(cl) > 1 else duration
         specs.append({"note": " / ".join(notes) or "clip",
                       "center": (min(secs) + max(secs)) // 2 + offset,
-                      "duration": duration})
+                      "duration": clip_dur})
     return specs
 
 
