@@ -2609,24 +2609,25 @@ async function getConfigCached() {
 function buildScriptPrompt(transcript, cfg) {
   const secs = parseInt(cfg && cfg.target_duration) || 60;
   const words = Math.round(secs * 2.5);
+  const durLabel = secs === 60 ? 'one-minute' : `~${secs}-second`;
   const voice = (cfg && (cfg.channel_profile || '').trim()) || '';
   const voiceBlock = voice
     ? `MY CHANNEL & VOICE (write in this style):\n${voice}\n\n`
     : '';
   return (
-`I want to turn a topic from my finance livestream into a punchy ~${secs}-second talking-head script for a YouTube Short. I'll read it aloud to camera.
+`I want to turn a topic from my finance livestream into a punchy ${durLabel} talking-head script for a YouTube Short. I'll read it aloud to camera.
 
 ${voiceBlock}THE RAW TRANSCRIPT (me talking live, unedited):
 """
 ${transcript}
 """
 
-Write a script I can read in about ${secs} seconds (~${words} words). Requirements:
+Write a script I can read in about 1 minute (~${words} words, aim for ${secs} seconds spoken). Requirements:
 - First person, spoken word — the way I actually talk.
-- Open with a strong hook in the very first line (a question, a bold claim, or a number).
-- One clear insight — cut the tangents, filler, and repetition from the raw transcript.
-- Keep the specific numbers, tickers, and facts; do not invent anything.
-- End with a quick, natural close.
+- Open with a scroll-stopping hook in the very first line (a question, a bold claim, or a number).
+- Pull the biggest facts and points from the transcript — lead with what matters most, and cut the tangents, filler, and repetition.
+- Keep the specific numbers, tickers, and facts exactly as stated; do not invent anything.
+- End with a prompt to follow for more (invite them to follow the channel for more breakdowns like this).
 - No hype, no clickbait. Plain, confident, educational.
 
 Output only the script, ready to read aloud. Then, after a line with just "---", suggest one title (include the relevant ticker) and a 1–2 sentence description.`
