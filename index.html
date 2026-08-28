@@ -295,12 +295,29 @@
     border-radius: 10px;
     padding: 15px 18px;
     display: flex;
-    align-items: center;
-    gap: 14px;
+    flex-direction: column;
     transition: border-color 0.15s;
     cursor: default;
   }
+  .clip-card-row { display: flex; align-items: center; gap: 14px; }
   .clip-card:hover { border-color: var(--border-hover); }
+
+  /* Inline transcript ("Script") accordion — expands out of the clip card */
+  .clip-script { max-height: 0; overflow: hidden; transition: max-height 0.22s ease; }
+  .clip-script.open { max-height: 800px; }
+  .clip-script-inner { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--border); }
+  .clip-script-head {
+    display: flex; align-items: center; justify-content: space-between;
+    font-size: 11px; font-weight: 600; text-transform: uppercase;
+    letter-spacing: 0.05em; color: var(--text-dim); margin-bottom: 8px;
+  }
+  .clip-script-text {
+    width: 100%; box-sizing: border-box; min-height: 120px; max-height: 260px;
+    resize: vertical; background: var(--input-bg); color: var(--text);
+    border: 1px solid #2a2a32; border-radius: 8px; padding: 12px 14px;
+    font-size: 13px; line-height: 1.6; font-family: inherit;
+  }
+  .clip-script-text:focus { outline: none; border-color: var(--accent); }
   /* Status rail — declared after :hover so the left edge keeps its colour */
   .clip-card.queued { border-left-color: #3a3a44; }
   .clip-card.downloading { border-left-color: var(--yellow); }
@@ -2056,19 +2073,6 @@
     </div>
   </div>
 
-  <!-- Clip transcript ("Script") -->
-  <div class="modal-overlay" id="scriptModal">
-    <div class="modal">
-      <div class="modal-title">Script</div>
-      <div id="scriptClipName" style="font-size:14px;font-weight:600;color:var(--text);margin-bottom:12px;"></div>
-      <div id="scriptBody" style="font-size:13.5px;line-height:1.6;color:var(--text);white-space:pre-wrap;max-height:50vh;overflow-y:auto;background:var(--input-bg);border:1px solid #2a2a32;border-radius:8px;padding:14px;"></div>
-      <div class="modal-actions">
-        <button class="btn-ghost btn-sm" onclick="closeScript()">Close</button>
-        <button class="btn-primary btn-sm" id="scriptCopyBtn" onclick="copyScript()">&#128203; Copy</button>
-      </div>
-    </div>
-  </div>
-
   <!-- Re-pull clip at custom bounds -->
   <div class="modal-overlay" id="repullModal">
     <div class="modal">
@@ -2268,6 +2272,7 @@ function renderClips(session) {
   html += `<div class="clip-cards">`;
   clips.forEach((c, idx) => {
     html += `<div class="clip-card ${c.status}">
+      <div class="clip-card-row">
       <span class="clip-num">${clipNumber(c, idx)}</span>
       <div class="clip-status ${c.status}"></div>
       <div class="clip-info">
@@ -2285,15 +2290,25 @@ function renderClips(session) {
           title="${c.rejected ? 'Rejected — click to unmark' : 'Mark as rejected (decided not to post)'}">
           &#10007; Reject
         </button>
-        ${c.status === 'exported' ? `<button class="btn-ghost btn-sm" onclick="event.stopPropagation(); openScript('${c.id}')" style="flex:0 0 auto;padding:5px 10px;font-size:11px;" title="${c.transcript_json ? 'View transcript' : 'Transcribe this clip (free, local)'}">&#128196; Script</button>` : ''}
+        ${c.status === 'exported' ? `<button id="scriptbtn-${c.id}" class="btn-ghost btn-sm ${openScripts[c.id] ? 'on' : ''}" onclick="event.stopPropagation(); toggleScript('${c.id}')" style="flex:0 0 auto;padding:5px 10px;font-size:11px;" title="Show the transcript inline">${openScripts[c.id] ? '&#9662;' : '&#9656;'} &#128196; Script</button>` : ''}
+        ${c.status === 'exported' ? `<button class="btn-ghost btn-sm" onclick="event.stopPropagation(); copyScript('${c.id}')" style="flex:0 0 auto;padding:5px 10px;font-size:11px;" title="Copy the transcript to the clipboard">&#128203; Copy</button>` : ''}
         ${c.status === 'exported' ? `<button class="btn-ghost btn-sm" onclick="event.stopPropagation(); openRepull('${c.id}')" style="flex:0 0 auto;padding:5px 10px;font-size:11px;" title="Re-pull this clip at custom start/end (e.g. if 5 min was too short)">&#8596; Adjust</button>` : ''}
         ${c.status === 'error' ? `<button class="btn-ghost btn-sm" onclick="event.stopPropagation(); retryClip('${c.id}')" style="flex:0 0 auto;padding:5px 12px;font-size:11px;">Retry</button>` : ''}
       </div>
+      </div>
+      ${c.status === 'exported' ? `<div class="clip-script ${openScripts[c.id] ? 'open' : ''}" id="script-${c.id}">
+        <div class="clip-script-inner">
+          <div class="clip-script-head"><span>Transcript</span><button class="btn-ghost btn-sm" onclick="event.stopPropagation(); copyScript('${c.id}')" style="padding:3px 9px;font-size:11px;" title="Copy the transcript">&#128203; Copy</button></div>
+          <textarea class="clip-script-text" id="scripttext-${c.id}" readonly spellcheck="false" placeholder="Transcript will appear here…"></textarea>
+        </div>
+      </div>` : ''}
     </div>`;
   });
   html += `</div>`;
 
   $('clipsContent').innerHTML = html;
+  // Re-render wipes the DOM, so restore any expanded transcripts and their text.
+  Object.keys(openScripts).forEach(id => { if (openScripts[id]) loadScriptInto(id); });
 }
 
 // The number shown next to a clip, matching its exported filename (NN_note_raw
@@ -2463,35 +2478,76 @@ async function confirmRepull() {
   loadSession(sid);
 }
 
-// --- Per-clip transcript ("Script"): local faster-whisper, free & offline ---
-let scriptClipId = null, scriptPollTimer = null;
+// --- Per-clip transcript ("Script"): inline accordion, local faster-whisper ---
+let openScripts = {};        // clipId -> true while its transcript accordion is open
+let scriptPollTimers = {};   // clipId -> poll interval while a transcript is in flight
 
-function openScript(clipId) {
+function toggleScript(clipId) {
+  if (openScripts[clipId]) collapseScript(clipId); else expandScript(clipId);
+}
+
+function expandScript(clipId) {
+  openScripts[clipId] = true;
+  const panel = $('script-' + clipId); if (panel) panel.classList.add('open');
+  const btn = $('scriptbtn-' + clipId);
+  if (btn) { btn.classList.add('on'); btn.innerHTML = '&#9662; &#128196; Script'; }
+  loadScriptInto(clipId);
+}
+
+function collapseScript(clipId) {
+  openScripts[clipId] = false;
+  const panel = $('script-' + clipId); if (panel) panel.classList.remove('open');
+  const btn = $('scriptbtn-' + clipId);
+  if (btn) { btn.classList.remove('on'); btn.innerHTML = '&#9656; &#128196; Script'; }
+}
+
+// Fill a clip's transcript textarea from cache; if empty, transcribe on demand
+// and poll until it lands. Safe to call repeatedly (re-renders re-invoke it).
+function loadScriptInto(clipId) {
+  const ta = $('scripttext-' + clipId);
+  if (!ta) return;
   const c = clipDataCache[clipId];
-  if (!c) return;
-  scriptClipId = clipId;
-  $('scriptClipName').textContent = c.note || 'Untitled clip';
-  $('scriptModal').classList.add('show');
-  if (c.transcript_json) { showScriptText(c.transcript_json); return; }
-  // Transcribe on demand, then poll the clip until the text lands.
-  $('scriptBody').textContent = 'Transcribing locally… the first run downloads the model (~30–60s), then it’s quick.';
-  $('scriptCopyBtn').disabled = true;
+  const text = c && scriptPlain(c.transcript_json);
+  if (text) { ta.value = text; return; }
+  ta.value = 'Transcribing locally… the first run downloads the model (~30–60s), then it’s quick.';
+  if (scriptPollTimers[clipId]) return;                 // already transcribing
   api('POST', `/api/clips/${clipId}/transcribe`, {}).catch(() => {});
-  clearInterval(scriptPollTimer);
-  scriptPollTimer = setInterval(async () => {
+  scriptPollTimers[clipId] = setInterval(async () => {
     const d = await api('GET', `/api/clips/${clipId}`);
     if (d && d.transcript_json) {
-      clearInterval(scriptPollTimer); scriptPollTimer = null;
+      clearInterval(scriptPollTimers[clipId]); delete scriptPollTimers[clipId];
       if (clipDataCache[clipId]) clipDataCache[clipId].transcript_json = d.transcript_json;
-      if (scriptClipId === clipId) showScriptText(d.transcript_json);
+      const t = $('scripttext-' + clipId);
+      if (t && openScripts[clipId]) t.value = scriptPlain(d.transcript_json);
     }
   }, 2500);
 }
 
-function showScriptText(text) {
-  const t = scriptPlain(text);
-  $('scriptBody').textContent = t;
-  $('scriptCopyBtn').disabled = !t;
+// Copy a clip's transcript straight to the clipboard. If it isn't transcribed
+// yet, kick it off (expanding the accordion so progress is visible) and copy
+// once it's ready.
+async function copyScript(clipId) {
+  const c = clipDataCache[clipId];
+  const text = c && scriptPlain(c.transcript_json);
+  if (text) { doCopyScript(text); return; }
+  toast('Transcribing… it’ll copy when ready');
+  if (!openScripts[clipId]) expandScript(clipId); else loadScriptInto(clipId);
+  const started = Date.now();
+  const wait = setInterval(async () => {
+    const d = await api('GET', `/api/clips/${clipId}`);
+    if (d && d.transcript_json) {
+      clearInterval(wait);
+      if (clipDataCache[clipId]) clipDataCache[clipId].transcript_json = d.transcript_json;
+      doCopyScript(scriptPlain(d.transcript_json));
+    } else if (Date.now() - started > 180000) {
+      clearInterval(wait); toast('Transcription is taking a while — try Copy again shortly');
+    }
+  }, 2500);
+}
+
+function doCopyScript(text) {
+  if (!text) return;
+  navigator.clipboard.writeText(text).then(() => toast('Script copied')).catch(() => toast('Copy failed'));
 }
 
 // Some clips carry a transcript from an older version stored as JSON
@@ -2503,17 +2559,6 @@ function scriptPlain(raw) {
     try { const o = JSON.parse(s); if (o && typeof o.text === 'string') return o.text.trim(); } catch (e) {}
   }
   return s;
-}
-
-function closeScript() {
-  $('scriptModal').classList.remove('show');
-  clearInterval(scriptPollTimer); scriptPollTimer = null; scriptClipId = null;
-}
-
-function copyScript() {
-  const t = $('scriptBody').textContent || '';
-  if (!t) return;
-  navigator.clipboard.writeText(t).then(() => toast('Script copied')).catch(() => toast('Copy failed'));
 }
 
 // Flip a clip's "posted to social" label. Optimistic: update the button
@@ -3783,9 +3828,6 @@ $('tsReminderModal').addEventListener('click', function(e) {
 });
 $('repullModal').addEventListener('click', function(e) {
   if (e.target === this) closeRepull();
-});
-$('scriptModal').addEventListener('click', function(e) {
-  if (e.target === this) closeScript();
 });
 </script>
 </body>
