@@ -2291,7 +2291,8 @@ function renderClips(session) {
           &#10007; Reject
         </button>
         ${c.status === 'exported' ? `<button id="scriptbtn-${c.id}" class="btn-ghost btn-sm ${openScripts[c.id] ? 'on' : ''}" onclick="event.stopPropagation(); toggleScript('${c.id}')" style="flex:0 0 auto;padding:5px 10px;font-size:11px;" title="Show the transcript inline">${openScripts[c.id] ? '&#9662;' : '&#9656;'} &#128196; Script</button>` : ''}
-        ${c.status === 'exported' ? `<button class="btn-ghost btn-sm" onclick="event.stopPropagation(); copyScript('${c.id}')" style="flex:0 0 auto;padding:5px 10px;font-size:11px;" title="Copy the transcript to the clipboard">&#128203; Copy</button>` : ''}
+        ${c.status === 'exported' ? `<button class="btn-ghost btn-sm" onclick="event.stopPropagation(); copyScript('${c.id}')" style="flex:0 0 auto;padding:5px 10px;font-size:11px;" title="Copy the raw transcript to the clipboard">&#128203; Copy</button>` : ''}
+        ${c.status === 'exported' ? `<button class="btn-ghost btn-sm" onclick="event.stopPropagation(); copyDraftPrompt('${c.id}')" style="flex:0 0 auto;padding:5px 10px;font-size:11px;" title="Copy an AI prompt (this transcript + your channel voice) — paste into Claude or ChatGPT to get a ~60s talking-head script">&#9997;&#65039; AI script</button>` : ''}
         ${c.status === 'exported' ? `<button class="btn-ghost btn-sm" onclick="event.stopPropagation(); openRepull('${c.id}')" style="flex:0 0 auto;padding:5px 10px;font-size:11px;" title="Re-pull this clip at custom start/end (e.g. if 5 min was too short)">&#8596; Adjust</button>` : ''}
         ${c.status === 'error' ? `<button class="btn-ghost btn-sm" onclick="event.stopPropagation(); retryClip('${c.id}')" style="flex:0 0 auto;padding:5px 12px;font-size:11px;">Retry</button>` : ''}
       </div>
@@ -2548,6 +2549,72 @@ async function copyScript(clipId) {
 function doCopyScript(text) {
   if (!text) return;
   navigator.clipboard.writeText(text).then(() => toast('Script copied')).catch(() => toast('Copy failed'));
+}
+
+// --- "AI script" — copy a ready-to-paste prompt that rewrites a clip's
+// transcript into a ~60s talking-head script in the channel's voice. Manual
+// route: no API key, you paste it into Claude/ChatGPT yourself. ---
+let _cfgCache = null;
+async function getConfigCached() {
+  if (!_cfgCache) { try { _cfgCache = await api('GET', '/api/config'); } catch (e) { _cfgCache = {}; } }
+  return _cfgCache;
+}
+
+function buildScriptPrompt(transcript, cfg) {
+  const secs = parseInt(cfg && cfg.target_duration) || 60;
+  const words = Math.round(secs * 2.5);
+  const voice = (cfg && (cfg.channel_profile || '').trim()) || '';
+  const voiceBlock = voice
+    ? `MY CHANNEL & VOICE (write in this style):\n${voice}\n\n`
+    : '';
+  return (
+`I want to turn a topic from my finance livestream into a punchy ~${secs}-second talking-head script for a YouTube Short. I'll read it aloud to camera.
+
+${voiceBlock}THE RAW TRANSCRIPT (me talking live, unedited):
+"""
+${transcript}
+"""
+
+Write a script I can read in about ${secs} seconds (~${words} words). Requirements:
+- First person, spoken word — the way I actually talk.
+- Open with a strong hook in the very first line (a question, a bold claim, or a number).
+- One clear insight — cut the tangents, filler, and repetition from the raw transcript.
+- Keep the specific numbers, tickers, and facts; do not invent anything.
+- End with a quick, natural close.
+- No hype, no clickbait. Plain, confident, educational.
+
+Output only the script, ready to read aloud. Then, after a line with just "---", suggest one title (include the relevant ticker) and a 1–2 sentence description.`
+  );
+}
+
+async function copyDraftPrompt(clipId) {
+  const cfg = await getConfigCached();
+  const c = clipDataCache[clipId];
+  let transcript = c && scriptPlain(c.transcript_json);
+  if (transcript) { doCopyPrompt(transcript, cfg); return; }
+  // Need a transcript first — transcribe (showing progress in the accordion),
+  // then build and copy the prompt once it lands.
+  toast('Transcribing first… the prompt will copy when it’s ready');
+  if (!openScripts[clipId]) expandScript(clipId); else loadScriptInto(clipId);
+  const started = Date.now();
+  const wait = setInterval(async () => {
+    const d = await api('GET', `/api/clips/${clipId}`);
+    if (d && d.transcript_json) {
+      clearInterval(wait);
+      if (clipDataCache[clipId]) clipDataCache[clipId].transcript_json = d.transcript_json;
+      doCopyPrompt(scriptPlain(d.transcript_json), cfg);
+    } else if (Date.now() - started > 180000) {
+      clearInterval(wait); toast('Transcription is taking a while — try AI script again shortly');
+    }
+  }, 2500);
+}
+
+function doCopyPrompt(transcript, cfg) {
+  if (!transcript) return;
+  const prompt = buildScriptPrompt(transcript, cfg);
+  navigator.clipboard.writeText(prompt)
+    .then(() => toast('AI script prompt copied — paste into Claude or ChatGPT'))
+    .catch(() => toast('Copy failed'));
 }
 
 // Some clips carry a transcript from an older version stored as JSON
