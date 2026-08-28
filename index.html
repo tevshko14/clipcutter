@@ -2225,6 +2225,7 @@ function switchView(name) {
 
 // ── Load & render session ──
 async function loadSession(sessionId) {
+  getConfigCached();   // warm the config so "AI script" can copy inside the click
   try {
     const session = await api('GET', `/api/sessions/${sessionId}`);
     if (session.error) { toast(session.error); return; }
@@ -2555,9 +2556,45 @@ async function copyScript(clipId) {
   }, 2500);
 }
 
+// Copy text to the clipboard, robust to the app's webview: the async Clipboard
+// API is often unavailable or blocked (e.g. outside a tight user gesture) inside
+// pywebview/WKWebView, so fall back to a hidden-textarea execCommand copy.
+function copyToClipboard(text) {
+  return new Promise((resolve) => {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(() => resolve(true), () => backendCopy(text).then(resolve));
+    } else {
+      backendCopy(text).then(resolve);
+    }
+  });
+}
+
+// Reliable fallback for the desktop app: copy via the backend (pbcopy). Last
+// resort is a hidden-textarea execCommand copy.
+function backendCopy(text) {
+  return api('POST', '/api/clipboard', { text })
+    .then((d) => (d && d.ok) ? true : execCopy(text))
+    .catch(() => execCopy(text));
+}
+
+function execCopy(text) {
+  try {
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    ta.setAttribute('readonly', '');
+    ta.style.position = 'fixed'; ta.style.top = '-1000px'; ta.style.opacity = '0';
+    document.body.appendChild(ta);
+    ta.focus(); ta.select();
+    try { ta.setSelectionRange(0, text.length); } catch (e) {}
+    const ok = document.execCommand('copy');
+    document.body.removeChild(ta);
+    return ok;
+  } catch (e) { return false; }
+}
+
 function doCopyScript(text) {
   if (!text) return;
-  navigator.clipboard.writeText(text).then(() => toast('Script copied')).catch(() => toast('Copy failed'));
+  copyToClipboard(text).then((ok) => toast(ok ? 'Script copied' : 'Copy failed'));
 }
 
 // --- "AI script" — copy a ready-to-paste prompt that rewrites a clip's
@@ -2596,34 +2633,38 @@ Output only the script, ready to read aloud. Then, after a line with just "---",
   );
 }
 
-async function copyDraftPrompt(clipId) {
-  const cfg = await getConfigCached();
+function copyDraftPrompt(clipId) {
   const c = clipDataCache[clipId];
-  let transcript = c && scriptPlain(c.transcript_json);
-  if (transcript) { doCopyPrompt(transcript, cfg); return; }
-  // Need a transcript first — transcribe (showing progress in the accordion),
-  // then build and copy the prompt once it lands.
-  toast('Transcribing first… the prompt will copy when it’s ready');
-  if (!openScripts[clipId]) expandScript(clipId); else loadScriptInto(clipId);
-  const started = Date.now();
-  const wait = setInterval(async () => {
-    const d = await api('GET', `/api/clips/${clipId}`);
-    if (d && d.transcript_json) {
-      clearInterval(wait);
-      if (clipDataCache[clipId]) clipDataCache[clipId].transcript_json = d.transcript_json;
-      doCopyPrompt(scriptPlain(d.transcript_json), cfg);
-    } else if (Date.now() - started > 180000) {
-      clearInterval(wait); toast('Transcription is taking a while — try AI script again shortly');
-    }
-  }, 2500);
+  const transcript = c && scriptPlain(c.transcript_json);
+  // Fast path: transcript + config both ready → copy synchronously inside the
+  // click, so the clipboard write stays within the user gesture.
+  if (transcript && _cfgCache) { doCopyPrompt(transcript, _cfgCache); return; }
+  // Otherwise fetch config and/or transcribe first, then copy. The execCommand
+  // fallback in copyToClipboard covers the user-gesture lost across the awaits.
+  getConfigCached().then((cfg) => {
+    const t = clipDataCache[clipId] && scriptPlain(clipDataCache[clipId].transcript_json);
+    if (t) { doCopyPrompt(t, cfg); return; }
+    toast('Transcribing first… the prompt will copy when it’s ready');
+    if (!openScripts[clipId]) expandScript(clipId); else loadScriptInto(clipId);
+    const started = Date.now();
+    const wait = setInterval(async () => {
+      const d = await api('GET', `/api/clips/${clipId}`);
+      if (d && d.transcript_json) {
+        clearInterval(wait);
+        if (clipDataCache[clipId]) clipDataCache[clipId].transcript_json = d.transcript_json;
+        doCopyPrompt(scriptPlain(d.transcript_json), cfg);
+      } else if (Date.now() - started > 180000) {
+        clearInterval(wait); toast('Transcription is taking a while — try AI script again shortly');
+      }
+    }, 2500);
+  });
 }
 
 function doCopyPrompt(transcript, cfg) {
   if (!transcript) return;
   const prompt = buildScriptPrompt(transcript, cfg);
-  navigator.clipboard.writeText(prompt)
-    .then(() => toast('AI script prompt copied — paste into Claude or ChatGPT'))
-    .catch(() => toast('Copy failed'));
+  copyToClipboard(prompt).then((ok) =>
+    toast(ok ? 'AI script prompt copied — paste into Claude or ChatGPT' : 'Copy failed'));
 }
 
 // Some clips carry a transcript from an older version stored as JSON

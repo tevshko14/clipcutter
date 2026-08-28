@@ -756,6 +756,25 @@ def api_update_config():
     save_config(config)
     return jsonify({"ok": True})
 
+
+@app.route("/api/clipboard", methods=["POST"])
+def api_clipboard():
+    """Copy text to the system clipboard from the backend. The app's webview
+    clipboard API is unreliable (blocked outside a tight user gesture, or absent),
+    so this is the robust fallback — macOS pbcopy, no extra dependencies."""
+    text = (request.json or {}).get("text", "")
+    if not isinstance(text, str) or not text:
+        return jsonify({"error": "no text"}), 400
+    try:
+        if sys.platform == "darwin":
+            p = subprocess.run(["pbcopy"], input=text.encode("utf-8"), timeout=5)
+            if p.returncode == 0:
+                return jsonify({"ok": True})
+            return jsonify({"error": "pbcopy failed"}), 500
+        return jsonify({"error": "unsupported platform"}), 500
+    except Exception as e:                                # noqa: BLE001
+        return jsonify({"error": str(e)[:140]}), 500
+
 # -- Sessions --
 
 def _build_clip_specs(clip_entries, merge_groups, offset, duration):
