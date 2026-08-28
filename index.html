@@ -318,6 +318,19 @@
     font-size: 13px; line-height: 1.6; font-family: inherit;
   }
   .clip-script-text:focus { outline: none; border-color: var(--accent); }
+  .clip-script-actions { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-top: 10px; }
+  .clip-expand-caret {
+    flex: 0 0 auto; color: var(--text-dim); font-size: 11px;
+    padding: 4px 6px; user-select: none; transition: color 0.15s;
+  }
+  .clip-card-row:hover .clip-expand-caret { color: var(--text); }
+  .clip-decision {
+    flex: 0 0 auto; font-size: 11px; font-weight: 600; white-space: nowrap;
+    padding: 2px 8px; border-radius: 6px; border: 1px solid transparent;
+  }
+  .clip-decision.posted { color: var(--green); border-color: var(--green); }
+  .clip-decision.rejected { color: var(--text-dim); border-color: var(--border); }
+  .clip-decision.none { display: none; }
   /* Status rail — declared after :hover so the left edge keeps its colour */
   .clip-card.queued { border-left-color: #3a3a44; }
   .clip-card.downloading { border-left-color: var(--yellow); }
@@ -2271,8 +2284,10 @@ function renderClips(session) {
 
   html += `<div class="clip-cards">`;
   clips.forEach((c, idx) => {
+    const exp = c.status === 'exported';
+    const dec = c.posted ? 'posted' : (c.rejected ? 'rejected' : 'none');
     html += `<div class="clip-card ${c.status}">
-      <div class="clip-card-row">
+      <div class="clip-card-row"${exp ? ` onclick="toggleScript('${c.id}')" style="cursor:pointer;"` : ''}>
       <span class="clip-num">${clipNumber(c, idx)}</span>
       <div class="clip-status ${c.status}"></div>
       <div class="clip-info">
@@ -2282,25 +2297,21 @@ function renderClips(session) {
       </div>
       <div class="clip-actions">
         <div class="clip-badge ${c.status}">${esc(CLIP_STATUS_LABELS[c.status] || c.status)}</div>
-        <button class="posted-toggle ${c.posted ? 'on' : ''}" onclick="event.stopPropagation(); togglePosted('${c.id}', this)"
-          title="${c.posted ? 'Posted to social — click to unmark' : 'Mark as posted to social'}">
-          <span class="posted-star">${c.posted ? '&#9733;' : '&#9734;'}</span> Posted
-        </button>
-        <button class="reject-toggle ${c.rejected ? 'on' : ''}" onclick="event.stopPropagation(); toggleRejected('${c.id}', this)"
-          title="${c.rejected ? 'Rejected — click to unmark' : 'Mark as rejected (decided not to post)'}">
-          &#10007; Reject
-        </button>
-        ${c.status === 'exported' ? `<button id="scriptbtn-${c.id}" class="btn-ghost btn-sm ${openScripts[c.id] ? 'on' : ''}" onclick="event.stopPropagation(); toggleScript('${c.id}')" style="flex:0 0 auto;padding:5px 10px;font-size:11px;" title="Show the transcript inline">${openScripts[c.id] ? '&#9662;' : '&#9656;'} &#128196; Script</button>` : ''}
-        ${c.status === 'exported' ? `<button class="btn-ghost btn-sm" onclick="event.stopPropagation(); copyScript('${c.id}')" style="flex:0 0 auto;padding:5px 10px;font-size:11px;" title="Copy the raw transcript to the clipboard">&#128203; Copy</button>` : ''}
-        ${c.status === 'exported' ? `<button class="btn-ghost btn-sm" onclick="event.stopPropagation(); copyDraftPrompt('${c.id}')" style="flex:0 0 auto;padding:5px 10px;font-size:11px;" title="Copy an AI prompt (this transcript + your channel voice) — paste into Claude or ChatGPT to get a ~60s talking-head script">&#9997;&#65039; AI script</button>` : ''}
-        ${c.status === 'exported' ? `<button class="btn-ghost btn-sm" onclick="event.stopPropagation(); openRepull('${c.id}')" style="flex:0 0 auto;padding:5px 10px;font-size:11px;" title="Re-pull this clip at custom start/end (e.g. if 5 min was too short)">&#8596; Adjust</button>` : ''}
+        <span class="clip-decision ${dec}">${c.posted ? '&#9733; Posted' : (c.rejected ? '&#10007; Rejected' : '')}</span>
+        ${exp ? `<button class="btn-ghost btn-sm" onclick="event.stopPropagation(); copyDraftPrompt('${c.id}')" style="flex:0 0 auto;padding:5px 10px;font-size:11px;" title="Copy an AI prompt (this transcript + your channel voice) — paste into Claude or ChatGPT to get a ~60s talking-head script">&#9997;&#65039; AI script</button>` : ''}
         ${c.status === 'error' ? `<button class="btn-ghost btn-sm" onclick="event.stopPropagation(); retryClip('${c.id}')" style="flex:0 0 auto;padding:5px 12px;font-size:11px;">Retry</button>` : ''}
+        ${exp ? `<span class="clip-expand-caret" id="scriptcaret-${c.id}" title="Show transcript & clip actions">${openScripts[c.id] ? '&#9662;' : '&#9656;'}</span>` : ''}
       </div>
       </div>
-      ${c.status === 'exported' ? `<div class="clip-script ${openScripts[c.id] ? 'open' : ''}" id="script-${c.id}">
+      ${exp ? `<div class="clip-script ${openScripts[c.id] ? 'open' : ''}" id="script-${c.id}">
         <div class="clip-script-inner">
           <div class="clip-script-head"><span>Transcript</span><button class="btn-ghost btn-sm" onclick="event.stopPropagation(); copyScript('${c.id}')" style="padding:3px 9px;font-size:11px;" title="Copy the transcript">&#128203; Copy</button></div>
           <textarea class="clip-script-text" id="scripttext-${c.id}" readonly spellcheck="false" placeholder="Transcript will appear here…"></textarea>
+          <div class="clip-script-actions">
+            <button class="posted-toggle ${c.posted ? 'on' : ''}" onclick="event.stopPropagation(); togglePosted('${c.id}', this)" title="${c.posted ? 'Posted to social — click to unmark' : 'Mark as posted to social'}"><span class="posted-star">${c.posted ? '&#9733;' : '&#9734;'}</span> Posted</button>
+            <button class="reject-toggle ${c.rejected ? 'on' : ''}" onclick="event.stopPropagation(); toggleRejected('${c.id}', this)" title="${c.rejected ? 'Rejected — click to unmark' : 'Mark as rejected (decided not to post)'}">&#10007; Reject</button>
+            <button class="btn-ghost btn-sm" onclick="event.stopPropagation(); openRepull('${c.id}')" style="flex:0 0 auto;padding:5px 10px;font-size:11px;" title="Re-pull this clip at custom start/end (e.g. if 5 min was too short)">&#8596; Adjust</button>
+          </div>
         </div>
       </div>` : ''}
     </div>`;
@@ -2490,16 +2501,14 @@ function toggleScript(clipId) {
 function expandScript(clipId) {
   openScripts[clipId] = true;
   const panel = $('script-' + clipId); if (panel) panel.classList.add('open');
-  const btn = $('scriptbtn-' + clipId);
-  if (btn) { btn.classList.add('on'); btn.innerHTML = '&#9662; &#128196; Script'; }
+  const caret = $('scriptcaret-' + clipId); if (caret) caret.innerHTML = '&#9662;';
   loadScriptInto(clipId);
 }
 
 function collapseScript(clipId) {
   openScripts[clipId] = false;
   const panel = $('script-' + clipId); if (panel) panel.classList.remove('open');
-  const btn = $('scriptbtn-' + clipId);
-  if (btn) { btn.classList.remove('on'); btn.innerHTML = '&#9656; &#128196; Script'; }
+  const caret = $('scriptcaret-' + clipId); if (caret) caret.innerHTML = '&#9656;';
 }
 
 // Fill a clip's transcript textarea from cache; if empty, transcribe on demand
@@ -2655,12 +2664,19 @@ async function setClipDecision(clipId, decision, btn) {
   }
 }
 
-// Sync both decision buttons in a clip card to the cached state.
+// Sync both decision buttons in a clip card to the cached state, plus the
+// collapsed-row indicator pill. Posted/Reject now live in the expanded panel.
 function refreshDecisionButtons(anyBtn, cached) {
-  const actions = anyBtn && anyBtn.closest('.clip-actions');
-  if (!actions) return;
-  applyPostedState(actions.querySelector('.posted-toggle'), !!(cached && cached.posted));
-  applyRejectState(actions.querySelector('.reject-toggle'), !!(cached && cached.rejected));
+  const card = anyBtn && anyBtn.closest('.clip-card');
+  if (!card) return;
+  const posted = !!(cached && cached.posted), rejected = !!(cached && cached.rejected);
+  applyPostedState(card.querySelector('.posted-toggle'), posted);
+  applyRejectState(card.querySelector('.reject-toggle'), rejected);
+  const pill = card.querySelector('.clip-decision');
+  if (pill) {
+    pill.className = 'clip-decision ' + (posted ? 'posted' : (rejected ? 'rejected' : 'none'));
+    pill.innerHTML = posted ? '&#9733; Posted' : (rejected ? '&#10007; Rejected' : '');
+  }
 }
 
 function applyRejectState(btn, on) {
