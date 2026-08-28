@@ -317,6 +317,61 @@ except Exception:
     _INTAKE_CONCURRENCY = 5
 _intake_sem = threading.Semaphore(_INTAKE_CONCURRENCY)
 
+# --- Per-clip transcript ("Script") via local faster-whisper: free, offline,
+# no API key. The model is cached after first load; transcription is
+# serialized (it's CPU-heavy) so many clips don't thrash at once. ---
+_transcribe_lock = threading.Lock()
+_whisper_model = None
+_whisper_model_name = None
+
+
+def _get_whisper():
+    global _whisper_model, _whisper_model_name
+    name = (load_config().get("whisper_model") or "small").strip()
+    if _whisper_model is None or _whisper_model_name != name:
+        from faster_whisper import WhisperModel
+        _whisper_model = WhisperModel(name, device="cpu", compute_type="int8")
+        _whisper_model_name = name
+    return _whisper_model
+
+
+def _set_transcript(clip_id, text):
+    with with_db() as conn:
+        conn.execute("UPDATE clips SET transcript_json = ? WHERE id = ?", (text, clip_id))
+        conn.commit()
+
+
+def transcribe_clip(clip_id: str):
+    """Transcribe a clip's audio to text with local faster-whisper. Stores the
+    text on the clip (transcript_json) and writes a .txt next to the exported
+    file so the script lives in the clip folder. Runs in a thread."""
+    with with_db() as conn:
+        clip = row_to_dict(conn.execute(
+            "SELECT id, export_file, raw_file FROM clips WHERE id = ?", (clip_id,)).fetchone())
+    if not clip:
+        return
+    src = clip.get("export_file") or clip.get("raw_file")
+    if not src or not Path(src).exists():
+        _set_transcript(clip_id, "[no audio file to transcribe — export the clip first]")
+        return
+    try:
+        with _transcribe_lock:
+            segments, _ = _get_whisper().transcribe(src, language="en")
+            text = " ".join(s.text.strip() for s in segments).strip() or "[no speech detected]"
+    except Exception as e:                                # noqa: BLE001
+        log.error("Transcribe failed for %s: %s", clip_id, e)
+        _set_transcript(clip_id, f"[transcription failed: {str(e)[:140]}]")
+        return
+    _set_transcript(clip_id, text)
+    exp = clip.get("export_file")
+    if exp:
+        try:
+            Path(exp).with_suffix(".txt").write_text(text)
+        except OSError as e:
+            log.warning("Couldn't write transcript .txt for %s: %s", clip_id, e)
+    log.info("Transcribed clip %s (%d chars)", clip_id, len(text))
+
+
 def export_clip(clip_id: str):
     """Re-encode a clip's raw download to CFR MP4 in the output folder.
     No trim (full raw range), no captions, no vertical crop — just DaVinci-ready CFR."""
@@ -694,6 +749,10 @@ def api_update_config():
             config["download_batch_size"] = max(1, min(20, int(data["download_batch_size"])))
         except (TypeError, ValueError):
             pass
+    if "whisper_model" in data:
+        m = (data["whisper_model"] or "").strip().lower()
+        if m in ("tiny", "base", "small", "medium"):
+            config["whisper_model"] = m
     save_config(config)
     return jsonify({"ok": True})
 
@@ -854,7 +913,7 @@ def api_get_session(session_id):
                start_seconds, end_seconds, status, error_text, raw_file,
                ai_suggestion_start, ai_suggestion_end, ai_reasoning,
                final_start, final_end, export_file, created_at,
-               generated_title, generated_description, posted, rejected
+               generated_title, generated_description, posted, rejected, transcript_json
                FROM clips WHERE session_id = ? ORDER BY center_seconds""",
             (session_id,)
         ).fetchall())
@@ -928,6 +987,20 @@ def api_retry_failed_clips(session_id):
     for clip_id in ids:
         threading.Thread(target=retry_clip, args=(clip_id,), daemon=True).start()
     return jsonify({"ok": True, "retried": len(ids)})
+
+@app.route("/api/clips/<clip_id>/transcribe", methods=["POST"])
+def api_transcribe_clip(clip_id):
+    """Kick off a local transcript for one clip (free, offline faster-whisper).
+    The frontend polls the clip until transcript_json fills in."""
+    conn = get_db()
+    try:
+        exists = conn.execute("SELECT 1 FROM clips WHERE id = ?", (clip_id,)).fetchone()
+    finally:
+        conn.close()
+    if not exists:
+        return jsonify({"error": "Clip not found"}), 404
+    threading.Thread(target=transcribe_clip, args=(clip_id,), daemon=True).start()
+    return jsonify({"ok": True})
 
 @app.route("/api/clips/<clip_id>/repull", methods=["POST"])
 def api_repull_clip(clip_id):

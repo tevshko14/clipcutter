@@ -2010,6 +2010,16 @@
         <div class="hint">Each Potential Clip becomes this much footage, centered on its timestamp.</div>
       </div>
       <div class="field">
+        <label>Transcript quality (Script)</label>
+        <select id="settingsWhisperModel">
+          <option value="tiny">Tiny — fastest, least accurate</option>
+          <option value="base">Base</option>
+          <option value="small">Small — recommended</option>
+          <option value="medium">Medium — most accurate, slowest</option>
+        </select>
+        <div class="hint">Local transcription model for the per-clip Script. Bigger = more accurate (better with tickers/jargon) but slower and a larger one-time download. Free, runs on your Mac.</div>
+      </div>
+      <div class="field">
         <label>Download batch size</label>
         <input type="number" id="settingsBatchSize" value="5" min="1" max="20">
         <div class="hint">How many clips download at once on Get Clips. Lower = gentler on YouTube (fewer rate-limit/bot blocks) but slower overall. Takes effect on next launch.</div>
@@ -2042,6 +2052,19 @@
         <button class="btn-ghost btn-sm" onclick="closeMergeModal()">Cancel</button>
         <button class="btn-ghost btn-sm" onclick="skipMergeGetClips()" title="Ignore all suggestions and pull every clip separately">Don't merge</button>
         <button class="btn-primary btn-sm" onclick="confirmMergeGetClips()">Merge &amp; Get Clips</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Clip transcript ("Script") -->
+  <div class="modal-overlay" id="scriptModal">
+    <div class="modal">
+      <div class="modal-title">Script</div>
+      <div id="scriptClipName" style="font-size:14px;font-weight:600;color:var(--text);margin-bottom:12px;"></div>
+      <div id="scriptBody" style="font-size:13.5px;line-height:1.6;color:var(--text);white-space:pre-wrap;max-height:50vh;overflow-y:auto;background:var(--input-bg);border:1px solid #2a2a32;border-radius:8px;padding:14px;"></div>
+      <div class="modal-actions">
+        <button class="btn-ghost btn-sm" onclick="closeScript()">Close</button>
+        <button class="btn-primary btn-sm" id="scriptCopyBtn" onclick="copyScript()">&#128203; Copy</button>
       </div>
     </div>
   </div>
@@ -2262,6 +2285,7 @@ function renderClips(session) {
           title="${c.rejected ? 'Rejected — click to unmark' : 'Mark as rejected (decided not to post)'}">
           &#10007; Reject
         </button>
+        ${c.status === 'exported' ? `<button class="btn-ghost btn-sm" onclick="event.stopPropagation(); openScript('${c.id}')" style="flex:0 0 auto;padding:5px 10px;font-size:11px;" title="${c.transcript_json ? 'View transcript' : 'Transcribe this clip (free, local)'}">&#128196; Script</button>` : ''}
         ${c.status === 'exported' ? `<button class="btn-ghost btn-sm" onclick="event.stopPropagation(); openRepull('${c.id}')" style="flex:0 0 auto;padding:5px 10px;font-size:11px;" title="Re-pull this clip at custom start/end (e.g. if 5 min was too short)">&#8596; Adjust</button>` : ''}
         ${c.status === 'error' ? `<button class="btn-ghost btn-sm" onclick="event.stopPropagation(); retryClip('${c.id}')" style="flex:0 0 auto;padding:5px 12px;font-size:11px;">Retry</button>` : ''}
       </div>
@@ -2437,6 +2461,59 @@ async function confirmRepull() {
   toast('Re-pulling clip…');
   startPolling(sid);
   loadSession(sid);
+}
+
+// --- Per-clip transcript ("Script"): local faster-whisper, free & offline ---
+let scriptClipId = null, scriptPollTimer = null;
+
+function openScript(clipId) {
+  const c = clipDataCache[clipId];
+  if (!c) return;
+  scriptClipId = clipId;
+  $('scriptClipName').textContent = c.note || 'Untitled clip';
+  $('scriptModal').classList.add('show');
+  if (c.transcript_json) { showScriptText(c.transcript_json); return; }
+  // Transcribe on demand, then poll the clip until the text lands.
+  $('scriptBody').textContent = 'Transcribing locally… the first run downloads the model (~30–60s), then it’s quick.';
+  $('scriptCopyBtn').disabled = true;
+  api('POST', `/api/clips/${clipId}/transcribe`, {}).catch(() => {});
+  clearInterval(scriptPollTimer);
+  scriptPollTimer = setInterval(async () => {
+    const d = await api('GET', `/api/clips/${clipId}`);
+    if (d && d.transcript_json) {
+      clearInterval(scriptPollTimer); scriptPollTimer = null;
+      if (clipDataCache[clipId]) clipDataCache[clipId].transcript_json = d.transcript_json;
+      if (scriptClipId === clipId) showScriptText(d.transcript_json);
+    }
+  }, 2500);
+}
+
+function showScriptText(text) {
+  const t = scriptPlain(text);
+  $('scriptBody').textContent = t;
+  $('scriptCopyBtn').disabled = !t;
+}
+
+// Some clips carry a transcript from an older version stored as JSON
+// ({"text": "..."}); newer ones are plain text. Render either as clean text.
+function scriptPlain(raw) {
+  if (!raw) return '';
+  const s = String(raw).trim();
+  if (s.startsWith('{')) {
+    try { const o = JSON.parse(s); if (o && typeof o.text === 'string') return o.text.trim(); } catch (e) {}
+  }
+  return s;
+}
+
+function closeScript() {
+  $('scriptModal').classList.remove('show');
+  clearInterval(scriptPollTimer); scriptPollTimer = null; scriptClipId = null;
+}
+
+function copyScript() {
+  const t = $('scriptBody').textContent || '';
+  if (!t) return;
+  navigator.clipboard.writeText(t).then(() => toast('Script copied')).catch(() => toast('Copy failed'));
 }
 
 // Flip a clip's "posted to social" label. Optimistic: update the button
@@ -3668,6 +3745,7 @@ async function openSettings() {
     const config = await api('GET', '/api/config');
     $('settingsClipWindow').value = config.default_clip_window || 5;
     $('settingsBatchSize').value = config.download_batch_size || 5;
+    $('settingsWhisperModel').value = config.whisper_model || 'small';
     $('settingsCookiesBrowser').value = config.youtube_cookies_browser || '';
   } catch(e) {}
   $('settingsModal').classList.add('show');
@@ -3682,6 +3760,7 @@ async function saveSettings() {
     await api('PUT', '/api/config', {
       default_clip_window: parseInt($('settingsClipWindow').value) || 5,
       download_batch_size: parseInt($('settingsBatchSize').value) || 5,
+      whisper_model: $('settingsWhisperModel').value,
       youtube_cookies_browser: $('settingsCookiesBrowser').value,
     });
     closeSettings();
@@ -3704,6 +3783,9 @@ $('tsReminderModal').addEventListener('click', function(e) {
 });
 $('repullModal').addEventListener('click', function(e) {
   if (e.target === this) closeRepull();
+});
+$('scriptModal').addEventListener('click', function(e) {
+  if (e.target === this) closeScript();
 });
 </script>
 </body>

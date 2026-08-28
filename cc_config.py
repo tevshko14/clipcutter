@@ -37,6 +37,9 @@ DEFAULT_CONFIG = {
     # How many clips download/extract at once on Get Clips. Staggering avoids
     # hammering YouTube (bot-flag / 429) with a big batch. Applied on relaunch.
     "download_batch_size": 5,
+    # faster-whisper model for the per-clip Script (transcript). Bigger = more
+    # accurate, slower, larger one-time download. tiny/base/small/medium.
+    "whisper_model": "small",
 }
 
 
