@@ -173,9 +173,6 @@ def download_clip(clip_id: str, url: str):
         if not clip:
             return
 
-        conn.execute("UPDATE clips SET status = 'downloading' WHERE id = ?", (clip_id,))
-        conn.commit()
-
         session_dir = SESSIONS_DIR / clip["session_id"] / "raw"
         session_dir.mkdir(parents=True, exist_ok=True)
 
@@ -197,7 +194,11 @@ def download_clip(clip_id: str, url: str):
             url,
         ]
 
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+        # Stay 'queued' until a download slot frees (rolling batch of N).
+        with _intake_sem:
+            conn.execute("UPDATE clips SET status = 'downloading' WHERE id = ?", (clip_id,))
+            conn.commit()
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
         combined_output = (result.stdout or "") + (result.stderr or "")
         if result.returncode != 0:
             log.error("Download failed (rc=%s). Output tail: %s", result.returncode, combined_output[-300:])
@@ -247,9 +248,6 @@ def extract_clip_local(clip_id: str, source_path: str):
         if not clip:
             return
 
-        conn.execute("UPDATE clips SET status = 'downloading' WHERE id = ?", (clip_id,))
-        conn.commit()
-
         session_dir = SESSIONS_DIR / clip["session_id"] / "raw"
         session_dir.mkdir(parents=True, exist_ok=True)
 
@@ -266,7 +264,11 @@ def extract_clip_local(clip_id: str, source_path: str):
             str(output_path),
         ]
 
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+        # Stay 'queued' until a slot frees (rolling batch of N).
+        with _intake_sem:
+            conn.execute("UPDATE clips SET status = 'downloading' WHERE id = ?", (clip_id,))
+            conn.commit()
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
         if result.returncode == 0 and output_path.exists():
             conn.execute(
                 "UPDATE clips SET status = 'ready', raw_file = ? WHERE id = ?",
@@ -301,6 +303,19 @@ def extract_clip_local(clip_id: str, source_path: str):
 # encodes — each starved to a fraction of the CPU until all of them blow the
 # timeout. x264 already uses all cores; serializing is strictly faster.
 _export_lock = threading.Lock()
+
+# Cap how many clips download/extract at once. A big Get-Clips batch (20-30
+# clips) otherwise fires that many simultaneous YouTube downloads, which is
+# what trips YouTube's rate-limit / bot-flag. This is a rolling window: every
+# clip's worker spawns immediately but blocks here until a slot is free, so
+# exactly N are in flight and the next queued clip starts as one finishes.
+# Exports are separately serialized by _export_lock. Size is read once (config
+# change takes effect on relaunch).
+try:
+    _INTAKE_CONCURRENCY = max(1, min(20, int(load_config().get("download_batch_size", 5))))
+except Exception:
+    _INTAKE_CONCURRENCY = 5
+_intake_sem = threading.Semaphore(_INTAKE_CONCURRENCY)
 
 def export_clip(clip_id: str):
     """Re-encode a clip's raw download to CFR MP4 in the output folder.
@@ -674,6 +689,11 @@ def api_update_config():
     if "youtube_cookies_browser" in data:
         b = (data["youtube_cookies_browser"] or "").strip().lower()
         config["youtube_cookies_browser"] = b if b in _COOKIE_BROWSERS else ""
+    if "download_batch_size" in data:
+        try:
+            config["download_batch_size"] = max(1, min(20, int(data["download_batch_size"])))
+        except (TypeError, ValueError):
+            pass
     save_config(config)
     return jsonify({"ok": True})
 

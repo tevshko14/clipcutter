@@ -34,6 +34,9 @@ DEFAULT_CONFIG = {
     # downloads (fixes YouTube's "confirm you're not a bot" block). Empty =
     # off. One of: chrome, safari, firefox, edge, brave.
     "youtube_cookies_browser": "",
+    # How many clips download/extract at once on Get Clips. Staggering avoids
+    # hammering YouTube (bot-flag / 429) with a big batch. Applied on relaunch.
+    "download_batch_size": 5,
 }
 
 
